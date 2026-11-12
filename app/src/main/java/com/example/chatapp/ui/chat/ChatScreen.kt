@@ -3,12 +3,9 @@ package com.example.chatapp.ui.chat
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.*
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -30,113 +27,55 @@ import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.example.chatapp.ui.components.*
+import com.example.chatapp.ui.moth.*
 import com.example.chatapp.ui.theme.*
 import kotlinx.coroutines.delay
 
-enum class MessageType {
-    REGULAR,
-    DISAPPEARING,
-    VIEW_ONCE
-}
-
-data class MothMessage(
-    val id: String,
-    val text: String,
-    val isMine: Boolean,
-    val type: MessageType = MessageType.REGULAR,
-    var reactionCount: Int = 0,
-    var viewOnceOpened: Boolean = false,
-    var viewOnceRevealed: Boolean = false,
-)
-
 @Composable
 fun ChatScreen(
-    chatTitle: String = "mika",
+    state: MothState,
+    chatTitle: String,
     onBack: () -> Unit,
 ) {
     BackHandler { onBack() }
 
-    // Initial mock messages matching Screenshot 2
-    var messages by remember {
-        mutableStateOf(
-            listOf(
-                MothMessage(
-                    id = "1",
-                    text = "you coming tonight?",
-                    isMine = false,
-                    type = MessageType.REGULAR,
-                    reactionCount = 2,
-                ),
-                MothMessage(
-                    id = "2",
-                    text = "bringing the lanterns",
-                    isMine = true,
-                    type = MessageType.REGULAR,
-                ),
-                MothMessage(
-                    id = "3",
-                    text = "this one burns out soon",
-                    isMine = false,
-                    type = MessageType.DISAPPEARING,
-                ),
-                MothMessage(
-                    id = "4",
-                    text = "see you at the pier",
-                    isMine = true,
-                    type = MessageType.REGULAR,
-                ),
-                MothMessage(
-                    id = "5",
-                    text = "secret pier map: 3rd post by the tide",
-                    isMine = false,
-                    type = MessageType.VIEW_ONCE,
-                ),
-            )
-        )
-    }
+    val activeConv = state.getActiveConversation()
+    val activeChatId = activeConv?.id ?: "1"
+    val messages = activeConv?.messages ?: emptyList()
 
     var draft by remember { mutableStateOf("") }
+    var selectedSendType by remember { mutableStateOf(MessageType.REGULAR) }
+    var showCipherInfo by remember { mutableStateOf(false) }
+
     val listState = rememberLazyListState()
 
-    // Disappearing message ember countdown (10 embers)
-    var litEmbers by remember { mutableIntStateOf(6) }
-    var disappearingBurnedOut by remember { mutableStateOf(false) }
+    // Scroll to bottom when messages change
+    LaunchedEffect(messages.size, state.isContactTyping) {
+        if (messages.isNotEmpty()) {
+            listState.animateScrollToItem(messages.size)
+        }
+    }
 
-    LaunchedEffect(litEmbers) {
-        if (litEmbers > 0 && !disappearingBurnedOut) {
+    // Disappearing message embers timer ticker
+    LaunchedEffect(activeChatId, messages) {
+        val disappearingMsgs = messages.filter { it.type == MessageType.DISAPPEARING && it.embersRemaining > 0 }
+        if (disappearingMsgs.isNotEmpty()) {
             delay(3500)
-            litEmbers -= 1
-            if (litEmbers == 0) {
-                delay(1000)
-                disappearingBurnedOut = true
+            disappearingMsgs.forEach { msg ->
+                state.tickEmbers(activeChatId, msg.id)
             }
         }
     }
 
-    // Scroll to bottom when messages change
-    LaunchedEffect(messages.size) {
-        listState.animateScrollToItem(messages.size)
-    }
-
-    fun sendMessage() {
+    fun handleSend() {
         if (draft.isNotBlank()) {
-            val newMsg = MothMessage(
-                id = System.currentTimeMillis().toString(),
+            state.sendMessage(
+                chatId = activeChatId,
                 text = draft.trim(),
-                isMine = true,
-                type = MessageType.REGULAR,
+                type = selectedSendType,
             )
-            messages = messages + newMsg
             draft = ""
-        }
-    }
-
-    fun toggleReaction(msgId: String) {
-        messages = messages.map { msg ->
-            if (msg.id == msgId) {
-                val newCount = if (msg.reactionCount > 0) msg.reactionCount - 1 else 1
-                msg.copy(reactionCount = newCount)
-            } else msg
+            selectedSendType = MessageType.REGULAR
         }
     }
 
@@ -162,7 +101,7 @@ fun ChatScreen(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween,
             ) {
-                // Left: Lantern icon + title "moth hours"
+                // Left: Lantern icon + title "moth hours" (clickable to go back)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
@@ -185,17 +124,49 @@ fun ChatScreen(
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    modifier = Modifier.clickable { showCipherInfo = !showCipherInfo },
                 ) {
                     Box(
                         modifier = Modifier
                             .size(6.dp)
-                            .background(SecureGreen),
+                            .background(if (state.sealedCipherEnabled) SecureGreen else MutedText),
                     )
                     Text(
-                        text = "sealed",
+                        text = if (state.sealedCipherEnabled) "sealed" else "unsealed",
                         fontFamily = PixelifySans,
                         fontSize = 13.sp,
+                        color = if (state.sealedCipherEnabled) SecureGreen else MutedText,
+                    )
+                }
+            }
+        }
+
+        // Cipher Information Toast
+        AnimatedVisibility(visible = showCipherInfo) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(TheirBubbleFill)
+                    .border(1.dp, SecureGreen)
+                    .padding(horizontal = 14.dp, vertical = 6.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "channel: $chatTitle • 256-bit sealed pixel cipher",
+                        fontFamily = PixelifySans,
+                        fontSize = 11.sp,
                         color = SecureGreen,
+                    )
+                    Text(
+                        text = "✕",
+                        fontFamily = PixelifySans,
+                        fontSize = 11.sp,
+                        color = MutedText,
+                        modifier = Modifier.clickable { showCipherInfo = false },
                     )
                 }
             }
@@ -230,34 +201,60 @@ fun ChatScreen(
             ) {
                 items(messages, key = { it.id }) { msg ->
                     if (msg.type == MessageType.DISAPPEARING) {
-                        if (!disappearingBurnedOut) {
-                            DisappearingMessageBubble(
-                                message = msg,
-                                litEmbers = litEmbers,
-                                onToggleReaction = { toggleReaction(msg.id) },
-                            )
-                        }
+                        DisappearingMessageBubble(
+                            message = msg,
+                            litEmbers = msg.embersRemaining,
+                            onToggleReaction = { state.toggleReaction(activeChatId, msg.id) },
+                        )
                     } else if (msg.type == MessageType.VIEW_ONCE) {
                         ViewOnceCard(
                             message = msg,
-                            onOpen = {
-                                messages = messages.map {
-                                    if (it.id == msg.id) it.copy(viewOnceRevealed = !it.viewOnceRevealed)
-                                    else it
-                                }
-                            },
+                            onOpen = { state.revealViewOnce(activeChatId, msg.id) },
                         )
                     } else {
                         StandardMessageBubble(
                             message = msg,
-                            onToggleReaction = { toggleReaction(msg.id) },
+                            onToggleReaction = { state.toggleReaction(activeChatId, msg.id) },
                         )
                     }
                 }
 
                 // Typing indicator row (flapping moth + pulsing 3 dots)
-                item {
-                    TypingIndicatorRow()
+                if (state.isContactTyping) {
+                    item {
+                        TypingIndicatorRow()
+                    }
+                }
+            }
+        }
+
+        // Send mode selector indicator (if user chose Disappearing or View Once)
+        if (selectedSendType != MessageType.REGULAR) {
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(TheirBubbleFill)
+                    .padding(horizontal = 16.dp, vertical = 4.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = if (selectedSendType == MessageType.DISAPPEARING) "🔥 sending as burning message (10 embers)"
+                        else "📜 sending as view-once sealed card",
+                        fontFamily = PixelifySans,
+                        fontSize = 11.sp,
+                        color = LanternAmber,
+                    )
+                    Text(
+                        text = "cancel",
+                        fontFamily = PixelifySans,
+                        fontSize = 11.sp,
+                        color = MutedText,
+                        modifier = Modifier.clickable { selectedSendType = MessageType.REGULAR },
+                    )
                 }
             }
         }
@@ -268,12 +265,12 @@ fun ChatScreen(
                 .fillMaxWidth()
                 .background(MothHeaderBg)
                 .border(width = 2.dp, color = MothDivider)
-                .padding(horizontal = 14.dp, vertical = 10.dp),
+                .padding(horizontal = 12.dp, vertical = 10.dp),
         ) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
             ) {
                 // Stepped-corner text field "say something"
                 SteppedBox(
@@ -285,39 +282,66 @@ fun ChatScreen(
                     cutSize = 4.dp,
                     borderWidth = 2.dp,
                 ) {
-                    Box(
+                    Row(
                         modifier = Modifier
                             .fillMaxSize()
-                            .padding(horizontal = 14.dp),
-                        contentAlignment = Alignment.CenterStart,
+                            .padding(horizontal = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
                     ) {
-                        if (draft.isEmpty()) {
-                            Text(
-                                text = "say something",
-                                fontFamily = PixelifySans,
-                                fontSize = 14.sp,
-                                color = PlaceholderText,
+                        Box(modifier = Modifier.weight(1f)) {
+                            if (draft.isEmpty()) {
+                                Text(
+                                    text = "say something",
+                                    fontFamily = PixelifySans,
+                                    fontSize = 14.sp,
+                                    color = PlaceholderText,
+                                )
+                            }
+                            BasicTextField(
+                                value = draft,
+                                onValueChange = { draft = it },
+                                textStyle = TextStyle(
+                                    fontFamily = PixelifySans,
+                                    fontSize = 14.sp,
+                                    color = TheirBubbleText,
+                                ),
+                                cursorBrush = SolidColor(LanternAmber),
+                                singleLine = true,
+                                keyboardOptions = KeyboardOptions(
+                                    capitalization = KeyboardCapitalization.Sentences,
+                                    imeAction = ImeAction.Send,
+                                ),
+                                keyboardActions = KeyboardActions(onSend = { handleSend() }),
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .testTag("message_input_field"),
                             )
                         }
-                        BasicTextField(
-                            value = draft,
-                            onValueChange = { draft = it },
-                            textStyle = TextStyle(
-                                fontFamily = PixelifySans,
+
+                        // Message Type Quick Toggles (disappearing ember or view once seal)
+                        Row(
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Text(
+                                text = "🔥",
                                 fontSize = 14.sp,
-                                color = TheirBubbleText,
-                            ),
-                            cursorBrush = SolidColor(LanternAmber),
-                            singleLine = true,
-                            keyboardOptions = KeyboardOptions(
-                                capitalization = KeyboardCapitalization.Sentences,
-                                imeAction = ImeAction.Send,
-                            ),
-                            keyboardActions = KeyboardActions(onSend = { sendMessage() }),
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("message_input_field"),
-                        )
+                                modifier = Modifier
+                                    .clickable {
+                                        selectedSendType = if (selectedSendType == MessageType.DISAPPEARING) MessageType.REGULAR else MessageType.DISAPPEARING
+                                    }
+                                    .testTag("toggle_disappearing_button"),
+                            )
+                            Text(
+                                text = "📜",
+                                fontSize = 14.sp,
+                                modifier = Modifier
+                                    .clickable {
+                                        selectedSendType = if (selectedSendType == MessageType.VIEW_ONCE) MessageType.REGULAR else MessageType.VIEW_ONCE
+                                    }
+                                    .testTag("toggle_view_once_button"),
+                            )
+                        }
                     }
                 }
 
@@ -325,7 +349,7 @@ fun ChatScreen(
                 Box(
                     modifier = Modifier
                         .size(42.dp)
-                        .clickable(onClick = { sendMessage() })
+                        .clickable(onClick = { handleSend() })
                         .testTag("send_message_button"),
                     contentAlignment = Alignment.Center,
                 ) {
@@ -412,14 +436,18 @@ private fun DisappearingMessageBubble(
 ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.Start,
+        horizontalAlignment = if (message.isMine) Alignment.End else Alignment.Start,
     ) {
+        val bg = if (message.isMine) MyBubbleFill else TheirBubbleFill
+        val border = if (message.isMine) MyBubbleBorder else TheirBubbleBorder
+        val textColor = if (message.isMine) MyBubbleText else TheirBubbleText
+
         SteppedBox(
             modifier = Modifier
                 .clickable { onToggleReaction() }
                 .testTag("message_bubble_${message.id}"),
-            backgroundColor = TheirBubbleFill,
-            borderColor = TheirBubbleBorder,
+            backgroundColor = bg,
+            borderColor = border,
             cutSize = 4.dp,
             borderWidth = 2.dp,
         ) {
@@ -427,7 +455,7 @@ private fun DisappearingMessageBubble(
                 text = message.text,
                 fontFamily = PixelifySans,
                 fontSize = 14.sp,
-                color = TheirBubbleText,
+                color = textColor,
                 modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
             )
         }
@@ -438,7 +466,7 @@ private fun DisappearingMessageBubble(
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
-            modifier = Modifier.padding(start = 4.dp),
+            modifier = Modifier.padding(horizontal = 4.dp),
         ) {
             DisappearingEmbers(total = 10, litCount = litEmbers)
             Text(
@@ -461,7 +489,7 @@ private fun ViewOnceCard(
 ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
-        horizontalAlignment = Alignment.Start,
+        horizontalAlignment = if (message.isMine) Alignment.End else Alignment.Start,
     ) {
         SteppedBox(
             modifier = Modifier
@@ -480,18 +508,29 @@ private fun ViewOnceCard(
                 PixelWaxSeal(hasArrow = false)
 
                 Column {
+                    val title = when (message.viewOnceStatus) {
+                        ViewOnceStatus.UNOPENED -> "view once"
+                        ViewOnceStatus.REVEALED -> message.text
+                        ViewOnceStatus.BURNED -> "message burned"
+                    }
+                    val subtitle = when (message.viewOnceStatus) {
+                        ViewOnceStatus.UNOPENED -> "tap to open"
+                        ViewOnceStatus.REVEALED -> "tap to seal & burn"
+                        ViewOnceStatus.BURNED -> "sealed in ash"
+                    }
+
                     Text(
-                        text = if (message.viewOnceRevealed) message.text else "view once",
+                        text = title,
                         fontFamily = PixelifySans,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.Bold,
-                        color = TheirBubbleText,
+                        color = if (message.viewOnceStatus == ViewOnceStatus.BURNED) MutedText else TheirBubbleText,
                     )
                     Text(
-                        text = if (message.viewOnceRevealed) "burned upon closing" else "tap to open",
+                        text = subtitle,
                         fontFamily = PixelifySans,
                         fontSize = 12.sp,
-                        color = MutedText,
+                        color = if (message.viewOnceStatus == ViewOnceStatus.BURNED) WaxSealRed else MutedText,
                     )
                 }
             }

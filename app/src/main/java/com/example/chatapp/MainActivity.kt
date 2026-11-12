@@ -16,6 +16,7 @@ import androidx.compose.ui.Modifier
 import com.example.chatapp.ui.auth.LoginScreen
 import com.example.chatapp.ui.chat.ChatScreen
 import com.example.chatapp.ui.chatlist.ChatListScreen
+import com.example.chatapp.ui.moth.MothState
 import com.example.chatapp.ui.theme.ChatTheme
 import com.example.chatapp.ui.theme.MothBgDark
 import dagger.hilt.android.AndroidEntryPoint
@@ -48,6 +49,8 @@ class MainActivity : ComponentActivity() {
 
 @Composable
 fun MothNavigationRoot() {
+    val scope = rememberCoroutineScope()
+    val mothState = remember { MothState(scope) }
     var currentScreen by remember { mutableStateOf<MothScreen>(MothScreen.Login) }
 
     AnimatedContent(
@@ -59,13 +62,19 @@ fun MothNavigationRoot() {
     ) { screen ->
         when (screen) {
             MothScreen.Login -> LoginScreen(
+                state = mothState,
                 onLoginSuccess = { currentScreen = MothScreen.Home },
             )
             MothScreen.Home -> ChatListScreen(
-                onOpenChat = { title -> currentScreen = MothScreen.Chat(title) },
-                onNavigateToSettings = { currentScreen = MothScreen.Login },
+                state = mothState,
+                onOpenChat = { title ->
+                    mothState.openConversation(title)
+                    currentScreen = MothScreen.Chat(title)
+                },
+                onSignOut = { currentScreen = MothScreen.Login },
             )
             is MothScreen.Chat -> ChatScreen(
+                state = mothState,
                 chatTitle = screen.title,
                 onBack = { currentScreen = MothScreen.Home },
             )

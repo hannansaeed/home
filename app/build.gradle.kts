@@ -1,3 +1,5 @@
+import java.time.Duration
+
 plugins {
     id("com.android.application")
     id("org.jetbrains.kotlin.android")
@@ -10,7 +12,7 @@ android {
     namespace = "com.example.chatapp"
     compileSdk = 35
     defaultConfig {
-        applicationId = "com.example.chatapp"
+        applicationId = "com.aistudio.chatapp.kxmqvz"
         minSdk = 26
         targetSdk = 35
         versionCode = 1
@@ -63,5 +65,26 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
-    // Later: libsignal for E2EE, Coil for media, Media3 for voice notes
+    // Firebase BoM, Firestore, Auth & Credential Manager
+    val firebaseBom = platform("com.google.firebase:firebase-bom:33.7.0")
+    implementation(firebaseBom)
+    implementation("com.google.firebase:firebase-firestore")
+    implementation("com.google.firebase:firebase-auth")
+    implementation("androidx.credentials:credentials:1.3.0")
+    implementation("androidx.credentials:credentials-play-services-auth:1.3.0")
+    implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")
+    implementation("androidx.compose.material:material-icons-extended")
+    implementation("io.coil-kt:coil-compose:2.7.0")
+
+    testImplementation("junit:junit:4.13.2")
+    testImplementation("org.robolectric:robolectric:4.14.1")
+    testImplementation("com.google.truth:truth:1.4.4")
+}
+
+tasks.withType<Test> {
+    failFast = true
+    timeout.set(Duration.ofMinutes(2))
+    testLogging {
+        events("passed", "failed", "skipped")
+    }
 }

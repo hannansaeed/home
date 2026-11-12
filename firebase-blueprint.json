@@ -1,0 +1,126 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "Registered user profile",
+      "type": "object",
+      "properties": {
+        "userId": {
+          "type": "string",
+          "description": "User ID from Firebase Auth"
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User display name"
+        },
+        "email": {
+          "type": "string",
+          "description": "User email address"
+        },
+        "photoUrl": {
+          "type": "string",
+          "description": "Optional user avatar URL"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the user account was created. Clients must submit FieldValue.serverTimestamp()."
+        }
+      },
+      "required": ["userId", "displayName", "email", "createdAt"]
+    },
+    "Chat": {
+      "title": "Chat",
+      "description": "A conversation between participants",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the chat conversation"
+        },
+        "participantIds": {
+          "type": "array",
+          "description": "List of participant user IDs"
+        },
+        "participantNames": {
+          "type": "object",
+          "description": "Map of user ID to display name"
+        },
+        "lastMessage": {
+          "type": "string",
+          "description": "Text of the most recent message"
+        },
+        "lastMessageSenderId": {
+          "type": "string",
+          "description": "User ID of the sender of the last message"
+        },
+        "lastMessageSenderName": {
+          "type": "string",
+          "description": "Name of the sender of the last message"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the chat was created. Clients must submit FieldValue.serverTimestamp()."
+        },
+        "updatedAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the chat was last updated. Clients must submit FieldValue.serverTimestamp()."
+        }
+      },
+      "required": ["id", "participantIds", "lastMessage", "createdAt", "updatedAt"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "A message within a chat conversation",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique identifier for the message"
+        },
+        "chatId": {
+          "type": "string",
+          "description": "ID of the parent chat"
+        },
+        "senderId": {
+          "type": "string",
+          "description": "User ID of the message sender"
+        },
+        "senderName": {
+          "type": "string",
+          "description": "Display name of the message sender"
+        },
+        "text": {
+          "type": "string",
+          "description": "Message text content"
+        },
+        "participantIds": {
+          "type": "array",
+          "description": "Denormalized participant IDs for fast flat authorization"
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the message was sent. Clients must submit FieldValue.serverTimestamp()."
+        }
+      },
+      "required": ["id", "chatId", "senderId", "senderName", "text", "participantIds", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User profile collection"
+    },
+    "/chats/{chatId}": {
+      "schema": { "$ref": "#/entities/Chat" },
+      "description": "Top-level conversation threads"
+    },
+    "/chats/{chatId}/messages/{messageId}": {
+      "schema": { "$ref": "#/entities/ChatMessage" },
+      "description": "Messages inside a conversation thread"
+    }
+  }
+}

@@ -1,0 +1,6 @@
+{
+  "name": "ChatApp",
+  "description": "A secure chat application with encrypted local storage and real-time messaging",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

@@ -29,6 +29,7 @@ object AppModule {
     @Provides @Singleton
     fun database(@ApplicationContext ctx: Context): ChatDatabase {
         // TODO: derive passphrase from a key stored in Android Keystore, not a constant
+        SQLiteDatabase.loadLibs(ctx)
         val factory = SupportFactory(SQLiteDatabase.getBytes("dev-passphrase".toCharArray()))
         return Room.databaseBuilder(ctx, ChatDatabase::class.java, "chat.db")
             .openHelperFactory(factory).build()

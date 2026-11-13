@@ -39,13 +39,7 @@ object AppModule {
     @Provides
     @Singleton
     fun database(@ApplicationContext ctx: Context): ChatDatabase {
-        try {
-            ctx.deleteDatabase("chat.db")
-        } catch (_: Exception) {}
-
-        return Room.databaseBuilder(ctx, ChatDatabase::class.java, "chatapp_local.db")
-            .fallbackToDestructiveMigration()
-            .build()
+        return com.example.chatapp.data.local.ChatDatabaseProvider.get(ctx)
     }
 
     @Provides
@@ -56,6 +50,9 @@ object AppModule {
 
     @Provides
     fun messageDao(db: ChatDatabase): MessageDao = db.messageDao()
+
+    @Provides
+    fun mothDao(db: ChatDatabase): com.example.chatapp.data.local.MothDao = db.mothDao()
 }
 
 @Module

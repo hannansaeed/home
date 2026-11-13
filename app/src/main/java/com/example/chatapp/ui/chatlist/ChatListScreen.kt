@@ -39,6 +39,7 @@ fun ChatListScreen(
 
     var newContactName by remember { mutableStateOf("") }
     var newContactInitialMsg by remember { mutableStateOf("") }
+    var newChatError by remember { mutableStateOf<String?>(null) }
 
     val filteredConversations = remember(state.conversations, searchQuery) {
         if (searchQuery.isBlank()) state.conversations
@@ -173,7 +174,7 @@ fun ChatListScreen(
                                 },
                                 onClick = {
                                     showOptionsMenu = false
-                                    state.conversations = state.conversations.map { it.copy(unreadCount = 0) }
+                                    state.markAllAsRead()
                                 },
                             )
 
@@ -541,13 +542,33 @@ fun ChatListScreen(
                         }
                     }
 
+                    if (newChatError != null) {
+                        SteppedBox(
+                            modifier = Modifier.fillMaxWidth(),
+                            backgroundColor = TheirBubbleFill,
+                            borderColor = WaxSealRed,
+                            cutSize = 3.dp,
+                        ) {
+                            Text(
+                                text = newChatError.orEmpty(),
+                                fontFamily = PixelifySans,
+                                fontSize = 12.sp,
+                                color = WaxSealRed,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 6.dp),
+                            )
+                        }
+                    }
+
                     Row(
                         modifier = Modifier.fillMaxWidth(),
                         horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
                         SteppedButton(
                             text = "cancel",
-                            onClick = { showNewChatDialog = false },
+                            onClick = {
+                                showNewChatDialog = false
+                                newChatError = null
+                            },
                             backgroundColor = TheirBubbleFill,
                             borderColor = MothDivider,
                             textColor = TheirBubbleText,
@@ -561,11 +582,15 @@ fun ChatListScreen(
                                     state.createNewChat(
                                         name = newContactName.trim(),
                                         initialMessage = newContactInitialMsg.trim(),
+                                        onError = { newChatError = it },
+                                        onSuccess = {
+                                            showNewChatDialog = false
+                                            onOpenChat(newContactName.trim().lowercase())
+                                            newContactName = ""
+                                            newContactInitialMsg = ""
+                                            newChatError = null
+                                        }
                                     )
-                                    showNewChatDialog = false
-                                    onOpenChat(newContactName.trim())
-                                    newContactName = ""
-                                    newContactInitialMsg = ""
                                 }
                             },
                             backgroundColor = MyBubbleFill,

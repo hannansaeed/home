@@ -1,5 +1,6 @@
 package com.example.chatapp.data.local
 
+import android.content.Context
 import androidx.room.*
 import kotlinx.coroutines.flow.Flow
 
@@ -79,13 +80,123 @@ interface LocalChatDao {
     suspend fun upsertChat(chat: LocalChatEntity)
 }
 
+// =========================================================================
+// Moth Hours Local-First Storage (WhatsApp-style per-user on-device Room DB)
+// =========================================================================
+
+@Entity(tableName = "moth_chats")
+data class MothChatEntity(
+    @PrimaryKey val id: String, // "${ownerUsername}::${otherUsername}"
+    val ownerUsername: String,
+    val otherUsername: String,
+    val preview: String,
+    val time: String,
+    val avatarColorArgb: Long,
+    val unreadCount: Int = 0,
+    val isLit: Boolean = true,
+    val isDisappearing: Boolean = false,
+    val isViewOnce: Boolean = false,
+    val updatedAt: Long = System.currentTimeMillis(),
+)
+
+@Entity(tableName = "moth_messages")
+data class MothMessageEntity(
+    @PrimaryKey val localId: String, // "${ownerUsername}::${id}"
+    val id: String,
+    val ownerUsername: String,
+    val chatId: String,
+    val senderUsername: String,
+    val text: String,
+    val type: String = "REGULAR",
+    val reactionCount: Int = 0,
+    val hasReacted: Boolean = false,
+    val viewOnceStatus: String = "UNOPENED",
+    val embersRemaining: Int = 10,
+    val time: String = "now",
+    val timestamp: Long = System.currentTimeMillis(),
+    val attachmentType: String? = null,      // "PHOTO" | "FILE" | null
+    val attachmentName: String? = null,
+    val attachmentLocalPath: String? = null,
+    val attachmentMimeType: String? = null,
+    val attachmentSizeBytes: Long = 0L,
+)
+
+@Dao
+interface MothDao {
+    @Query("SELECT * FROM moth_chats WHERE ownerUsername = :ownerUsername ORDER BY updatedAt DESC")
+    fun observeChats(ownerUsername: String): Flow<List<MothChatEntity>>
+
+    @Query("SELECT * FROM moth_chats WHERE id = :id LIMIT 1")
+    suspend fun getChat(id: String): MothChatEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertChat(chat: MothChatEntity)
+
+    @Query("UPDATE moth_chats SET unreadCount = 0 WHERE id = :chatId")
+    suspend fun markChatRead(chatId: String)
+
+    @Query("UPDATE moth_chats SET unreadCount = 0 WHERE ownerUsername = :ownerUsername")
+    suspend fun markAllChatsRead(ownerUsername: String)
+
+    @Query("SELECT * FROM moth_messages WHERE ownerUsername = :ownerUsername AND chatId = :chatId ORDER BY timestamp ASC")
+    fun observeMessages(ownerUsername: String, chatId: String): Flow<List<MothMessageEntity>>
+
+    @Query("SELECT * FROM moth_messages WHERE localId = :localId LIMIT 1")
+    suspend fun getMessage(localId: String): MothMessageEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertMessage(message: MothMessageEntity)
+
+    @Query("DELETE FROM moth_messages WHERE localId = :localId")
+    suspend fun deleteMessage(localId: String)
+
+    @Query("UPDATE moth_messages SET embersRemaining = :embers WHERE localId = :localId")
+    suspend fun updateEmbers(localId: String, embers: Int)
+
+    @Query("UPDATE moth_messages SET viewOnceStatus = :status WHERE localId = :localId")
+    suspend fun updateViewOnceStatus(localId: String, status: String)
+
+    @Query("UPDATE moth_messages SET reactionCount = :count, hasReacted = :hasReacted WHERE localId = :localId")
+    suspend fun updateReaction(localId: String, count: Int, hasReacted: Boolean)
+}
+
 @Database(
-    entities = [MessageEntity::class, LocalAccountEntity::class, LocalChatEntity::class],
-    version = 2,
+    entities = [
+        MessageEntity::class,
+        LocalAccountEntity::class,
+        LocalChatEntity::class,
+        MothChatEntity::class,
+        MothMessageEntity::class,
+    ],
+    version = 3,
     exportSchema = false,
 )
 abstract class ChatDatabase : RoomDatabase() {
     abstract fun messageDao(): MessageDao
     abstract fun accountDao(): LocalAccountDao
     abstract fun chatDao(): LocalChatDao
+    abstract fun mothDao(): MothDao
+}
+
+object ChatDatabaseProvider {
+    @Volatile
+    private var INSTANCE: ChatDatabase? = null
+
+    fun get(context: Context): ChatDatabase {
+        return INSTANCE ?: synchronized(this) {
+            INSTANCE ?: run {
+                try {
+                    context.applicationContext.deleteDatabase("chat.db")
+                } catch (_: Exception) {}
+                Room.databaseBuilder(
+                    context.applicationContext,
+                    ChatDatabase::class.java,
+                    "chatapp_local.db"
+                )
+                    .fallbackToDestructiveMigration()
+                    .build()
+                    .also { INSTANCE = it }
+            }
+        }
+    }
 }

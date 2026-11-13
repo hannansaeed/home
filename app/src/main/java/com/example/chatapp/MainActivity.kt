@@ -50,8 +50,11 @@ class MainActivity : ComponentActivity() {
 @Composable
 fun MothNavigationRoot() {
     val scope = rememberCoroutineScope()
-    val mothState = remember { MothState(scope) }
-    var currentScreen by remember { mutableStateOf<MothScreen>(MothScreen.Login) }
+    val context = androidx.compose.ui.platform.LocalContext.current
+    val mothState = remember { MothState(context, scope) }
+    var currentScreen by remember {
+        mutableStateOf<MothScreen>(if (mothState.isLoggedIn) MothScreen.Home else MothScreen.Login)
+    }
 
     AnimatedContent(
         targetState = currentScreen,
@@ -71,7 +74,10 @@ fun MothNavigationRoot() {
                     mothState.openConversation(title)
                     currentScreen = MothScreen.Chat(title)
                 },
-                onSignOut = { currentScreen = MothScreen.Login },
+                onSignOut = {
+                    mothState.signOut()
+                    currentScreen = MothScreen.Login
+                },
             )
             is MothScreen.Chat -> ChatScreen(
                 state = mothState,

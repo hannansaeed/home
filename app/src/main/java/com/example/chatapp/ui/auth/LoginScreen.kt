@@ -59,9 +59,12 @@ fun LoginScreen(
         } else if (loginPassphrase.isBlank()) {
             errorMessage = "please enter your passphrase"
         } else {
-            errorMessage = null
-            state.currentUsername = loginUsername.trim()
-            onLoginSuccess()
+            state.loginUser(
+                username = loginUsername,
+                passphrase = loginPassphrase,
+                onSuccess = { onLoginSuccess() },
+                onError = { errorMessage = it }
+            )
         }
     }
 
@@ -75,9 +78,12 @@ fun LoginScreen(
         } else if (signupPassphrase != signupConfirmPassphrase) {
             errorMessage = "passphrases do not match"
         } else {
-            errorMessage = null
-            state.currentUsername = signupUsername.trim()
-            onLoginSuccess()
+            state.registerUser(
+                username = signupUsername,
+                passphrase = signupPassphrase,
+                onSuccess = { onLoginSuccess() },
+                onError = { errorMessage = it }
+            )
         }
     }
 

@@ -181,7 +181,7 @@ fun MothProfileView(
                                         color = if (isSelected) LanternAmber else MothBgDark,
                                         shape = SteppedCornerShape(3.dp),
                                     )
-                                    .clickable { state.userAvatarColor = color },
+                                    .clickable { state.updateAvatarColor(color) },
                             )
                         }
                     }

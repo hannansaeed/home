@@ -86,7 +86,7 @@ interface LocalChatDao {
 
 @Entity(tableName = "moth_chats")
 data class MothChatEntity(
-    @PrimaryKey val id: String, // "${ownerUsername}::${otherUsername}"
+    @PrimaryKey val id: String, // "${ownerUsername}::${otherUsername}" or "${ownerUsername}::grp_${groupId}"
     val ownerUsername: String,
     val otherUsername: String,
     val preview: String,
@@ -98,6 +98,10 @@ data class MothChatEntity(
     val isDisappearing: Boolean = false,
     val isViewOnce: Boolean = false,
     val updatedAt: Long = System.currentTimeMillis(),
+    val isGroup: Boolean = false,
+    val groupIcon: String = "🏮",
+    val adminsJson: String = "[]",
+    val membersJson: String = "[]",
 )
 
 @Entity(tableName = "moth_messages")
@@ -111,17 +115,30 @@ data class MothMessageEntity(
     val type: String = "REGULAR", // REGULAR | DISAPPEARING | VIEW_ONCE | BURNED_TRACE
     val reactionCount: Int = 0,
     val hasReacted: Boolean = false,
+    val reactionsJson: String = "{}", // {"❤️":["alice","bob"]}
     val viewOnceStatus: String = "UNOPENED",
     val embersRemaining: Int = 10,
     val leaveTrace: Boolean = false,
     val burnStartAt: Long = 0L,
     val time: String = "now",
     val timestamp: Long = System.currentTimeMillis(),
-    val attachmentType: String? = null,      // "PHOTO" | "FILE" | "STICKER" | null
+    val attachmentType: String? = null,      // "PHOTO" | "FILE" | "STICKER" | "VOICE" | null
     val attachmentName: String? = null,
     val attachmentLocalPath: String? = null,
     val attachmentMimeType: String? = null,
     val attachmentSizeBytes: Long = 0L,
+    val audioDurationSec: Int = 0,
+    val replyToId: String? = null,
+    val replyToSender: String? = null,
+    val replyToPreview: String? = null,
+    val isForwarded: Boolean = false,
+    val isEdited: Boolean = false,
+    val isDeleted: Boolean = false,
+    val isPinned: Boolean = false,
+    val status: String = "SENT", // SENDING | SENT | DELIVERED | READ
+    val sentAt: Long = 0L,
+    val deliveredAt: Long = 0L,
+    val readAt: Long = 0L,
 )
 
 @Entity(tableName = "moth_stickers")
@@ -131,6 +148,18 @@ data class MothStickerEntity(
     val label: String,
     val imageLocalPath: String,
     val createdAt: Long = System.currentTimeMillis(),
+)
+
+@Entity(tableName = "moth_call_logs")
+data class MothCallLogEntity(
+    @PrimaryKey val id: String,
+    val ownerUsername: String,
+    val peerUsername: String,
+    val callType: String, // VOICE | VIDEO
+    val direction: String, // INCOMING | OUTGOING | MISSED
+    val durationSec: Int = 0,
+    val timestamp: Long = System.currentTimeMillis(),
+    val timeLabel: String = "now",
 )
 
 @Dao
@@ -144,6 +173,9 @@ interface MothDao {
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun upsertChat(chat: MothChatEntity)
 
+    @Query("DELETE FROM moth_chats WHERE id = :chatId")
+    suspend fun deleteChat(chatId: String)
+
     @Query("UPDATE moth_chats SET unreadCount = 0 WHERE id = :chatId")
     suspend fun markChatRead(chatId: String)
 
@@ -155,6 +187,9 @@ interface MothDao {
 
     @Query("SELECT * FROM moth_messages WHERE ownerUsername = :ownerUsername AND chatId = :chatId ORDER BY timestamp ASC")
     fun observeMessages(ownerUsername: String, chatId: String): Flow<List<MothMessageEntity>>
+
+    @Query("SELECT * FROM moth_messages WHERE ownerUsername = :ownerUsername AND chatId = :chatId ORDER BY timestamp ASC")
+    suspend fun getMessagesByChatOnce(ownerUsername: String, chatId: String): List<MothMessageEntity>
 
     @Query("SELECT * FROM moth_messages WHERE ownerUsername = :ownerUsername AND type = 'DISAPPEARING'")
     suspend fun getDisappearingMessages(ownerUsername: String): List<MothMessageEntity>
@@ -183,8 +218,20 @@ interface MothDao {
     @Query("UPDATE moth_messages SET viewOnceStatus = 'BURNED', text = '', attachmentType = NULL, attachmentName = NULL, attachmentLocalPath = NULL, attachmentMimeType = NULL, attachmentSizeBytes = 0 WHERE localId = :localId")
     suspend fun burnViewOnceMessage(localId: String)
 
-    @Query("UPDATE moth_messages SET reactionCount = :count, hasReacted = :hasReacted WHERE localId = :localId")
-    suspend fun updateReaction(localId: String, count: Int, hasReacted: Boolean)
+    @Query("UPDATE moth_messages SET reactionCount = :count, hasReacted = :hasReacted, reactionsJson = :reactionsJson WHERE localId = :localId")
+    suspend fun updateReactions(localId: String, count: Int, hasReacted: Boolean, reactionsJson: String)
+
+    @Query("UPDATE moth_messages SET text = :newText, isEdited = 1 WHERE localId = :localId")
+    suspend fun updateMessageEdited(localId: String, newText: String)
+
+    @Query("UPDATE moth_messages SET isDeleted = 1, isPinned = 0, text = '', attachmentType = NULL, attachmentName = NULL, attachmentLocalPath = NULL, attachmentMimeType = NULL, attachmentSizeBytes = 0 WHERE localId = :localId")
+    suspend fun markMessageDeleted(localId: String)
+
+    @Query("UPDATE moth_messages SET isPinned = :pinned WHERE localId = :localId")
+    suspend fun updateMessagePinned(localId: String, pinned: Boolean)
+
+    @Query("UPDATE moth_messages SET status = :status, sentAt = CASE WHEN :sentAt > 0 THEN :sentAt ELSE sentAt END, deliveredAt = CASE WHEN :deliveredAt > 0 THEN :deliveredAt ELSE deliveredAt END, readAt = CASE WHEN :readAt > 0 THEN :readAt ELSE readAt END WHERE localId = :localId")
+    suspend fun updateMessageStatus(localId: String, status: String, sentAt: Long = 0L, deliveredAt: Long = 0L, readAt: Long = 0L)
 
     @Query("SELECT * FROM moth_stickers WHERE ownerUsername = :ownerUsername ORDER BY createdAt DESC")
     fun observeStickers(ownerUsername: String): Flow<List<MothStickerEntity>>
@@ -197,6 +244,15 @@ interface MothDao {
 
     @Query("DELETE FROM moth_stickers WHERE id = :id")
     suspend fun deleteSticker(id: String)
+
+    @Query("SELECT * FROM moth_call_logs WHERE ownerUsername = :ownerUsername ORDER BY timestamp DESC")
+    fun observeCallLogs(ownerUsername: String): Flow<List<MothCallLogEntity>>
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun upsertCallLog(log: MothCallLogEntity)
+
+    @Query("DELETE FROM moth_call_logs WHERE id = :id")
+    suspend fun deleteCallLog(id: String)
 
     @Query("SELECT attachmentLocalPath FROM moth_messages WHERE attachmentLocalPath IS NOT NULL")
     suspend fun getAllAttachmentPaths(): List<String>
@@ -216,8 +272,9 @@ interface MothDao {
         MothChatEntity::class,
         MothMessageEntity::class,
         MothStickerEntity::class,
+        MothCallLogEntity::class,
     ],
-    version = 4,
+    version = 5,
     exportSchema = false,
 )
 abstract class ChatDatabase : RoomDatabase() {

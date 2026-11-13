@@ -208,6 +208,7 @@ fun SteppedButton(
     cutSize: Dp = 4.dp,
     borderWidth: Dp = 2.dp,
     enabled: Boolean = true,
+    leadingIcon: (@Composable () -> Unit)? = null,
 ) {
     val shape = SteppedCornerShape(cutSize)
     Box(
@@ -215,15 +216,33 @@ fun SteppedButton(
             .background(backgroundColor, shape)
             .border(borderWidth, borderColor, shape)
             .clickable(enabled = enabled, onClick = onClick)
-            .padding(horizontal = 16.dp, vertical = 10.dp),
+            .padding(horizontal = if (text.isBlank()) 10.dp else 14.dp, vertical = 10.dp),
         contentAlignment = Alignment.Center,
     ) {
-        Text(
-            text = text,
-            fontFamily = PixelifySans,
-            fontSize = 14.sp,
-            fontWeight = FontWeight.Bold,
-            color = textColor,
-        )
+        if (leadingIcon != null && text.isNotBlank()) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(6.dp),
+            ) {
+                leadingIcon()
+                Text(
+                    text = text,
+                    fontFamily = PixelifySans,
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = textColor,
+                )
+            }
+        } else if (leadingIcon != null) {
+            leadingIcon()
+        } else {
+            Text(
+                text = text,
+                fontFamily = PixelifySans,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = textColor,
+            )
+        }
     }
 }

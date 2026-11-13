@@ -36,6 +36,9 @@ fun MothProfileView(
     var showAvatarOptions by remember { mutableStateOf(false) }
     var avatarError by remember { mutableStateOf<String?>(null) }
     var isUpdatingAvatar by remember { mutableStateOf(false) }
+    var showPinSetupDialog by remember { mutableStateOf(false) }
+    var pinInput by remember { mutableStateOf("") }
+    var pinError by remember { mutableStateOf<String?>(null) }
     val scrollState = rememberScrollState()
 
     val avatarPickerLauncher = rememberLauncherForActivityResult(
@@ -241,6 +244,134 @@ fun MothProfileView(
                 }
             }
 
+            SteppedBox(
+                modifier = Modifier.fillMaxWidth(),
+                backgroundColor = TheirBubbleFill,
+                borderColor = TheirBubbleBorder,
+                cutSize = 4.dp,
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Text(
+                        text = "privacy & screen",
+                        fontFamily = PixelifySans,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        color = LanternAmber,
+                    )
+
+                    PrivacyToggleRow(
+                        title = "block screenshots",
+                        subtitle = "hide screen in recents & block captures",
+                        checked = state.screenshotBlockingEnabled,
+                        testTag = "toggle_screenshot_block",
+                        onToggle = { state.setScreenshotBlocking(!state.screenshotBlockingEnabled) },
+                    )
+
+                    PrivacyToggleRow(
+                        title = "hide typing indicator",
+                        subtitle = "others won't see when you're typing",
+                        checked = state.hideTypingIndicators,
+                        testTag = "toggle_hide_typing",
+                        onToggle = { state.setHideTyping(!state.hideTypingIndicators) },
+                    )
+
+                    PrivacyToggleRow(
+                        title = "disable read receipts",
+                        subtitle = "don't send 'seen' confirmations",
+                        checked = state.disableReadReceipts,
+                        testTag = "toggle_disable_receipts",
+                        onToggle = { state.updateDisableReadReceipts(!state.disableReadReceipts) },
+                    )
+
+                    // App Lock PIN
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable {
+                                if (state.appLockEnabled) {
+                                    state.disableAppLock()
+                                } else {
+                                    pinInput = ""
+                                    pinError = null
+                                    showPinSetupDialog = true
+                                }
+                            }
+                            .padding(vertical = 4.dp)
+                            .testTag("toggle_app_lock"),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "app lock (4-digit pin)",
+                                fontFamily = PixelifySans,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 13.sp,
+                                color = TheirBubbleText,
+                            )
+                            Text(
+                                text = if (state.appLockEnabled) "locked when leaving app • tap to remove" else "require pin when opening app",
+                                fontFamily = PixelifySans,
+                                fontSize = 11.sp,
+                                color = MutedText,
+                            )
+                        }
+                        SteppedBox(
+                            backgroundColor = if (state.appLockEnabled) SecureGreen else MothBgDark,
+                            borderColor = if (state.appLockEnabled) SecureGreen else MothDivider,
+                            cutSize = 2.dp,
+                            borderWidth = 1.dp,
+                        ) {
+                            Text(
+                                text = if (state.appLockEnabled) "ON" else "OFF",
+                                fontFamily = PixelifySans,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp,
+                                color = if (state.appLockEnabled) MothBgDark else MutedText,
+                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+                            )
+                        }
+                    }
+
+                    // Message Font Size
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = "message font size",
+                            fontFamily = PixelifySans,
+                            fontSize = 12.sp,
+                            color = MutedText,
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            val sizeOptions = listOf(
+                                "small" to 0.85f,
+                                "medium" to 1.0f,
+                                "large" to 1.25f,
+                            )
+                            sizeOptions.forEach { (label, scaleVal) ->
+                                val selected = kotlin.math.abs(state.messageFontScale - scaleVal) < 0.05f
+                                SteppedButton(
+                                    text = label,
+                                    onClick = { state.setFontScale(scaleVal) },
+                                    backgroundColor = if (selected) MyBubbleFill else MothBgDark,
+                                    borderColor = if (selected) MyBubbleBorder else MothDivider,
+                                    textColor = if (selected) MyBubbleText else TheirBubbleText,
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .testTag("font_size_$label"),
+                                    cutSize = 3.dp,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             // Extinguish Lantern / Sign Out button
             if (!showLogoutConfirm) {
                 SteppedButton(
@@ -295,6 +426,118 @@ fun MothProfileView(
                                 backgroundColor = TheirBubbleBorder,
                                 borderColor = MothDivider,
                                 textColor = TheirBubbleText,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        if (showPinSetupDialog) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0x991A1633))
+                    .clickable { showPinSetupDialog = false }
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                SteppedBox(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = false) {}
+                        .testTag("pin_setup_dialog"),
+                    backgroundColor = MothHeaderBg,
+                    borderColor = LanternAmber,
+                    cutSize = 4.dp,
+                ) {
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        Text(
+                            text = "set 4-digit app lock pin",
+                            fontFamily = PixelifySans,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = LanternAmber,
+                        )
+                        SteppedBox(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .height(42.dp),
+                            backgroundColor = MothBgDark,
+                            borderColor = TheirBubbleBorder,
+                            cutSize = 3.dp,
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .padding(horizontal = 10.dp),
+                                contentAlignment = Alignment.CenterStart,
+                            ) {
+                                if (pinInput.isEmpty()) {
+                                    Text(
+                                        text = "enter 4 digits (e.g. 1234)",
+                                        fontFamily = PixelifySans,
+                                        fontSize = 13.sp,
+                                        color = PlaceholderText,
+                                    )
+                                }
+                                BasicTextField(
+                                    value = pinInput,
+                                    onValueChange = { next ->
+                                        if (next.length <= 4 && next.all { it.isDigit() }) {
+                                            pinInput = next
+                                            pinError = null
+                                        }
+                                    },
+                                    textStyle = TextStyle(
+                                        fontFamily = PixelifySans,
+                                        fontSize = 16.sp,
+                                        color = TheirBubbleText,
+                                    ),
+                                    cursorBrush = SolidColor(LanternAmber),
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                            }
+                        }
+                        if (pinError != null) {
+                            Text(
+                                text = pinError ?: "",
+                                fontFamily = PixelifySans,
+                                fontSize = 11.sp,
+                                color = WaxSealRed,
+                            )
+                        }
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            SteppedButton(
+                                text = "cancel",
+                                onClick = { showPinSetupDialog = false },
+                                backgroundColor = TheirBubbleFill,
+                                borderColor = MothDivider,
+                                textColor = TheirBubbleText,
+                                modifier = Modifier.weight(1f),
+                                cutSize = 3.dp,
+                            )
+                            SteppedButton(
+                                text = "enable pin",
+                                onClick = {
+                                    if (state.enableAppLock(pinInput)) {
+                                        showPinSetupDialog = false
+                                    } else {
+                                        pinError = "enter exactly 4 digits"
+                                    }
+                                },
+                                backgroundColor = MyBubbleFill,
+                                borderColor = MyBubbleBorder,
+                                textColor = MyBubbleText,
+                                modifier = Modifier.weight(1f),
+                                cutSize = 3.dp,
                             )
                         }
                     }
@@ -390,6 +633,56 @@ fun MothProfileView(
                     }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun PrivacyToggleRow(
+    title: String,
+    subtitle: String,
+    checked: Boolean,
+    testTag: String,
+    onToggle: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onToggle)
+            .padding(vertical = 4.dp)
+            .testTag(testTag),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Column(modifier = Modifier.weight(1f).padding(end = 10.dp)) {
+            Text(
+                text = title,
+                fontFamily = PixelifySans,
+                fontWeight = FontWeight.Bold,
+                fontSize = 13.sp,
+                color = TheirBubbleText,
+            )
+            Text(
+                text = subtitle,
+                fontFamily = PixelifySans,
+                fontSize = 11.sp,
+                color = MutedText,
+            )
+        }
+        SteppedBox(
+            backgroundColor = if (checked) SecureGreen else MothBgDark,
+            borderColor = if (checked) SecureGreen else MothDivider,
+            cutSize = 2.dp,
+            borderWidth = 1.dp,
+        ) {
+            Text(
+                text = if (checked) "ON" else "OFF",
+                fontFamily = PixelifySans,
+                fontWeight = FontWeight.Bold,
+                fontSize = 11.sp,
+                color = if (checked) MothBgDark else MutedText,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+            )
         }
     }
 }

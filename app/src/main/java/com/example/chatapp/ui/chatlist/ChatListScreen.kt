@@ -46,6 +46,12 @@ fun ChatListScreen(
     var newContactInitialMsg by remember { mutableStateOf("") }
     var newChatError by remember { mutableStateOf<String?>(null) }
 
+    var showNewGroupDialog by remember { mutableStateOf(false) }
+    var newGroupName by remember { mutableStateOf("") }
+    var newGroupIcon by remember { mutableStateOf("🏮") }
+    var newGroupMembers by remember { mutableStateOf("") }
+    var newGroupError by remember { mutableStateOf<String?>(null) }
+
     var selectedProfileUsername by remember { mutableStateOf<String?>(null) }
     var profileDetails by remember { mutableStateOf<UserProfileDetails?>(null) }
     var isLoadingProfile by remember { mutableStateOf(false) }
@@ -106,20 +112,23 @@ fun ChatListScreen(
                 // Right: Search icon + Options menu button (containing + button inside)
                 Row(
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(16.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Text(
-                        text = "⌕",
-                        fontSize = 20.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = if (showSearch) TheirBubbleText else LanternAmber,
+                    Box(
                         modifier = Modifier
+                            .size(40.dp)
                             .clickable {
                                 showSearch = !showSearch
                                 if (!showSearch) searchQuery = ""
                             }
                             .testTag("search_icon"),
-                    )
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        PixelSearchIcon(
+                            tint = if (showSearch) TheirBubbleText else LanternAmber,
+                            modifier = Modifier.size(20.dp),
+                        )
+                    }
 
                     // Options button (three vertical dots ⋮) with dropdown containing + new lantern action
                     Box {
@@ -167,6 +176,31 @@ fun ChatListScreen(
                                     showNewChatDialog = true
                                 },
                                 modifier = Modifier.testTag("menu_new_chat_button"),
+                            )
+
+                            DropdownMenuItem(
+                                text = {
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        PixelLantern(
+                                            isLit = true,
+                                            modifier = Modifier.size(16.dp, 19.dp),
+                                        )
+                                        Text(
+                                            text = "new group lantern",
+                                            fontFamily = PixelifySans,
+                                            fontSize = 13.sp,
+                                            color = TheirBubbleText,
+                                        )
+                                    }
+                                },
+                                onClick = {
+                                    showOptionsMenu = false
+                                    showNewGroupDialog = true
+                                },
+                                modifier = Modifier.testTag("menu_new_group_button"),
                             )
 
                             DropdownMenuItem(
@@ -319,7 +353,7 @@ fun ChatListScreen(
                                 state.conversations.forEach { conv ->
                                     LitNowItem(
                                         name = conv.name,
-                                        isLit = state.isContactOnline(conv.name),
+                                        isLit = if (conv.isGroup) true else state.isContactOnline(conv.name),
                                         onClick = {
                                             state.openConversation(conv.id)
                                             onOpenChat(conv.name)
@@ -366,7 +400,12 @@ fun ChatListScreen(
                                             onOpenChat(conv.name)
                                         },
                                         onAvatarClick = {
-                                            selectedProfileUsername = conv.name
+                                            if (conv.isGroup) {
+                                                state.openConversation(conv.id)
+                                                onOpenChat(conv.name)
+                                            } else {
+                                                selectedProfileUsername = conv.name
+                                            }
                                         },
                                     )
                                     Box(
@@ -384,7 +423,7 @@ fun ChatListScreen(
                     MothMiniGameView()
                 }
                 "empty" -> {
-                    EmptyPageView()
+                    EmptyPageView(state = state)
                 }
                 "me" -> {
                     MothProfileView(
@@ -807,6 +846,203 @@ fun ChatListScreen(
             }
         }
     }
+    // New Group Dialog
+    if (showNewGroupDialog) {
+        val groupIcons = listOf("🏮", "🦋", "🌙", "🔥", "✦", "🎲", "🌿", "⚡")
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0x991A1633))
+                .clickable { showNewGroupDialog = false }
+                .padding(20.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            SteppedBox(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = false) {}
+                    .testTag("new_group_dialog"),
+                backgroundColor = MothHeaderBg,
+                borderColor = LanternAmber,
+                cutSize = 4.dp,
+            ) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "new group lantern",
+                            fontFamily = PixelifySans,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 16.sp,
+                            color = LanternAmber,
+                        )
+                        Text(
+                            text = "✕",
+                            fontSize = 14.sp,
+                            color = MutedText,
+                            modifier = Modifier.clickable { showNewGroupDialog = false },
+                        )
+                    }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "group name",
+                            fontFamily = PixelifySans,
+                            fontSize = 12.sp,
+                            color = MutedText,
+                        )
+                        SteppedBox(
+                            modifier = Modifier.fillMaxWidth().height(40.dp),
+                            backgroundColor = MothBgDark,
+                            borderColor = TheirBubbleBorder,
+                            cutSize = 3.dp,
+                        ) {
+                            Box(
+                                modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
+                                contentAlignment = Alignment.CenterStart,
+                            ) {
+                                if (newGroupName.isEmpty()) {
+                                    Text(
+                                        text = "e.g. night watch",
+                                        fontFamily = PixelifySans,
+                                        fontSize = 13.sp,
+                                        color = PlaceholderText,
+                                    )
+                                }
+                                BasicTextField(
+                                    value = newGroupName,
+                                    onValueChange = { newGroupName = it; newGroupError = null },
+                                    textStyle = TextStyle(fontFamily = PixelifySans, fontSize = 14.sp, color = TheirBubbleText),
+                                    cursorBrush = SolidColor(LanternAmber),
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth().testTag("group_name_input"),
+                                )
+                            }
+                        }
+                    }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text(
+                            text = "group icon",
+                            fontFamily = PixelifySans,
+                            fontSize = 12.sp,
+                            color = MutedText,
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                            groupIcons.forEach { ic ->
+                                val selected = newGroupIcon == ic
+                                SteppedBox(
+                                    modifier = Modifier
+                                        .size(34.dp)
+                                        .clickable { newGroupIcon = ic },
+                                    backgroundColor = if (selected) MyBubbleFill else MothBgDark,
+                                    borderColor = if (selected) LanternAmber else MothDivider,
+                                    cutSize = 2.dp,
+                                    borderWidth = 1.dp,
+                                ) {
+                                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                        Text(text = ic, fontSize = 16.sp)
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                        Text(
+                            text = "member handles (comma separated)",
+                            fontFamily = PixelifySans,
+                            fontSize = 12.sp,
+                            color = MutedText,
+                        )
+                        SteppedBox(
+                            modifier = Modifier.fillMaxWidth().height(40.dp),
+                            backgroundColor = MothBgDark,
+                            borderColor = TheirBubbleBorder,
+                            cutSize = 3.dp,
+                        ) {
+                            Box(
+                                modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
+                                contentAlignment = Alignment.CenterStart,
+                            ) {
+                                if (newGroupMembers.isEmpty()) {
+                                    Text(
+                                        text = "e.g. aster, tide_watcher",
+                                        fontFamily = PixelifySans,
+                                        fontSize = 13.sp,
+                                        color = PlaceholderText,
+                                    )
+                                }
+                                BasicTextField(
+                                    value = newGroupMembers,
+                                    onValueChange = { newGroupMembers = it; newGroupError = null },
+                                    textStyle = TextStyle(fontFamily = PixelifySans, fontSize = 14.sp, color = TheirBubbleText),
+                                    cursorBrush = SolidColor(LanternAmber),
+                                    singleLine = true,
+                                    modifier = Modifier.fillMaxWidth().testTag("group_members_input"),
+                                )
+                            }
+                        }
+                    }
+
+                    if (newGroupError != null) {
+                        Text(
+                            text = newGroupError.orEmpty(),
+                            fontFamily = PixelifySans,
+                            fontSize = 12.sp,
+                            color = WaxSealRed,
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        SteppedButton(
+                            text = "cancel",
+                            onClick = { showNewGroupDialog = false; newGroupError = null },
+                            backgroundColor = TheirBubbleFill,
+                            borderColor = MothDivider,
+                            textColor = TheirBubbleText,
+                            modifier = Modifier.weight(1f),
+                            cutSize = 3.dp,
+                        )
+                        SteppedButton(
+                            text = "create group",
+                            onClick = {
+                                val handles = newGroupMembers.split(",", " ").map { it.trim() }.filter { it.isNotBlank() }
+                                state.createGroupChat(
+                                    groupName = newGroupName,
+                                    groupIcon = newGroupIcon,
+                                    memberHandles = handles,
+                                    onError = { newGroupError = it },
+                                    onSuccess = {
+                                        val title = newGroupName.trim()
+                                        showNewGroupDialog = false
+                                        newGroupName = ""
+                                        newGroupMembers = ""
+                                        newGroupError = null
+                                        onOpenChat(title)
+                                    }
+                                )
+                            },
+                            backgroundColor = MyBubbleFill,
+                            borderColor = MyBubbleBorder,
+                            textColor = MyBubbleText,
+                            modifier = Modifier.weight(1f).testTag("create_group_confirm_button"),
+                            cutSize = 3.dp,
+                        )
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -845,14 +1081,31 @@ private fun ConversationRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        // 40px Stepped-Corner Avatar (tap to view user profile details)
-        UserAvatar(
-            avatarPath = conversation.avatarLocalPath,
-            color = conversation.avatarColor,
-            modifier = Modifier
-                .clickable(onClick = onAvatarClick)
-                .testTag("chat_avatar_${conversation.name}"),
-        )
+        if (conversation.isGroup) {
+            SteppedBox(
+                modifier = Modifier
+                    .size(40.dp)
+                    .clickable(onClick = onAvatarClick)
+                    .testTag("chat_avatar_${conversation.name}"),
+                backgroundColor = conversation.avatarColor,
+                borderColor = LanternAmber,
+                cutSize = 4.dp,
+                borderWidth = 2.dp,
+            ) {
+                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                    Text(text = conversation.groupIcon, fontSize = 18.sp)
+                }
+            }
+        } else {
+            // 40px Stepped-Corner Avatar (tap to view user profile details)
+            UserAvatar(
+                avatarPath = conversation.avatarLocalPath,
+                color = conversation.avatarColor,
+                modifier = Modifier
+                    .clickable(onClick = onAvatarClick)
+                    .testTag("chat_avatar_${conversation.name}"),
+            )
+        }
 
         // Middle column: Name and Preview
         Column(modifier = Modifier.weight(1f)) {
@@ -862,7 +1115,7 @@ private fun ConversationRow(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 Text(
-                    text = conversation.name,
+                    text = if (conversation.isGroup) "${conversation.name} (${conversation.members.size})" else conversation.name,
                     fontFamily = PixelifySans,
                     fontWeight = FontWeight.Bold,
                     fontSize = 15.sp,

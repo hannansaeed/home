@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.MothHours" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/moth_bg_dark</item>
+        <item name="android:colorBackground">@color/moth_bg_dark</item>
+    </style>
+
+    <color name="moth_bg_dark">#1A1633</color>
+</resources>

@@ -194,4 +194,18 @@ class FirestoreChatRepository @Inject constructor(
             )
         ).await()
     }
+
+    override suspend fun react(chatId: String, messageId: String, emoji: String) {
+        val uid = requireUserId()
+        val msgRef = db.collection("chats").document(chatId)
+            .collection("messages").document(messageId)
+        val snap = msgRef.get().await()
+        val existing = (snap.get("reactions.$emoji") as? List<*>)?.filterIsInstance<String>().orEmpty()
+        val op = if (existing.contains(uid)) {
+            FieldValue.arrayRemove(uid)
+        } else {
+            FieldValue.arrayUnion(uid)
+        }
+        msgRef.update("reactions.$emoji", op).await()
+    }
 }

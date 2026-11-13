@@ -41,6 +41,9 @@ class CompositeChatRepository @Inject constructor(
     override suspend fun sendMessage(chatId: String, text: String) =
         activeRepo.sendMessage(chatId, text)
 
+    override suspend fun react(chatId: String, messageId: String, emoji: String) =
+        activeRepo.react(chatId, messageId, emoji)
+
     override suspend fun syncCurrentUserProfile() =
         activeRepo.syncCurrentUserProfile()
 }

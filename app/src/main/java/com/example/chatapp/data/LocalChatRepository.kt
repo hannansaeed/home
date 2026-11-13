@@ -125,6 +125,18 @@ class LocalChatRepository @Inject constructor(
         )
     }
 
+    override suspend fun react(chatId: String, messageId: String, emoji: String) {
+        val myName = currentUserName ?: "You"
+        val currentJson = messageDao.reactions(messageId) ?: "{}"
+        val obj = try { org.json.JSONObject(currentJson) } catch (_: Exception) { org.json.JSONObject() }
+        val arr = obj.optJSONArray(emoji) ?: org.json.JSONArray()
+        val list = mutableListOf<String>()
+        for (i in 0 until arr.length()) list.add(arr.optString(i))
+        if (list.contains(myName)) list.remove(myName) else list.add(myName)
+        if (list.isEmpty()) obj.remove(emoji) else obj.put(emoji, org.json.JSONArray(list))
+        messageDao.setReactions(messageId, obj.toString())
+    }
+
     override suspend fun syncCurrentUserProfile() {
         val myName = currentUserName ?: return
         // Ensure welcome chat exists if there are no chats yet

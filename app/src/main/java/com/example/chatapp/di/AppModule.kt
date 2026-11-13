@@ -60,4 +60,7 @@ object AppModule {
 abstract class BindingsModule {
     @Binds
     abstract fun repo(impl: CompositeChatRepository): ChatRepository
+
+    @Binds
+    abstract fun messageCrypto(impl: com.example.chatapp.crypto.EcdhAesGcmCrypto): com.example.chatapp.crypto.MessageCrypto
 }

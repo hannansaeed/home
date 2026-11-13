@@ -317,6 +317,328 @@ fun PixelStickerIcon(
 }
 
 /**
+ * Outlined Pixel Back Arrow (crisp Canvas blocks — avoids font glyph issues on older Android).
+ */
+@Composable
+fun PixelBackArrowIcon(
+    tint: Color = LanternAmber,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier.size(24.dp)) {
+        val u = size.width / 10f
+        // Horizontal shaft
+        drawRect(tint, Offset(2 * u, 4.5f * u), Size(7 * u, 1.1f * u))
+        // Upper diagonal head
+        drawRect(tint, Offset(2 * u, 3.5f * u), Size(1.2f * u, 1 * u))
+        drawRect(tint, Offset(3 * u, 2.5f * u), Size(1.2f * u, 1 * u))
+        drawRect(tint, Offset(4 * u, 1.5f * u), Size(1.2f * u, 1 * u))
+        // Lower diagonal head
+        drawRect(tint, Offset(2 * u, 5.6f * u), Size(1.2f * u, 1 * u))
+        drawRect(tint, Offset(3 * u, 6.6f * u), Size(1.2f * u, 1 * u))
+        drawRect(tint, Offset(4 * u, 7.6f * u), Size(1.2f * u, 1 * u))
+        // Sharp tip
+        drawRect(tint, Offset(1 * u, 4.5f * u), Size(1.2f * u, 1.1f * u))
+    }
+}
+
+/**
+ * Outlined Pixel Magnifying Glass Search Icon.
+ */
+@Composable
+fun PixelSearchIcon(
+    tint: Color = LanternAmber,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier.size(24.dp)) {
+        val u = size.width / 10f
+        // Stepped octagonal glass outline
+        drawRect(tint, Offset(2 * u, 1 * u), Size(4 * u, 1 * u)) // top
+        drawRect(tint, Offset(2 * u, 6 * u), Size(4 * u, 1 * u)) // bottom
+        drawRect(tint, Offset(1 * u, 2 * u), Size(1 * u, 4 * u)) // left
+        drawRect(tint, Offset(6 * u, 2 * u), Size(1 * u, 4 * u)) // right
+        // Handle (bottom-right diagonal pixels)
+        drawRect(tint, Offset(6.2f * u, 6.2f * u), Size(1.2f * u, 1.2f * u))
+        drawRect(tint, Offset(7.2f * u, 7.2f * u), Size(1.2f * u, 1.2f * u))
+        drawRect(tint, Offset(8.2f * u, 8.2f * u), Size(1.2f * u, 1.2f * u))
+    }
+}
+
+/**
+ * Outlined Pixel Microphone Icon (for Voice Note & Mute/Unmute buttons).
+ */
+@Composable
+fun PixelMicIcon(
+    tint: Color = LanternAmber,
+    muted: Boolean = false,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier.size(20.dp)) {
+        val u = size.width / 10f
+        // Capsule outline
+        drawRect(tint, Offset(3.5f * u, 0.8f * u), Size(3 * u, 1 * u))
+        drawRect(tint, Offset(3 * u, 1.8f * u), Size(1 * u, 3.6f * u))
+        drawRect(tint, Offset(6 * u, 1.8f * u), Size(1 * u, 3.6f * u))
+        drawRect(tint, Offset(3.5f * u, 5.2f * u), Size(3 * u, 0.9f * u))
+        // Outer cradle arms
+        drawRect(tint, Offset(1.5f * u, 4 * u), Size(1 * u, 2.2f * u))
+        drawRect(tint, Offset(7.5f * u, 4 * u), Size(1 * u, 2.2f * u))
+        drawRect(tint, Offset(2.3f * u, 6.2f * u), Size(5.4f * u, 0.9f * u))
+        // Stem & base
+        drawRect(tint, Offset(4.5f * u, 7.1f * u), Size(1 * u, 1.5f * u))
+        drawRect(tint, Offset(3 * u, 8.6f * u), Size(4 * u, 0.9f * u))
+        if (muted) {
+            for (i in 1..8) {
+                drawRect(tint, Offset(i * u, (9 - i) * u), Size(1.1f * u, 1.1f * u))
+            }
+        }
+    }
+}
+
+/**
+ * Outlined Pixel Phone Handset Icon (for Voice Call buttons).
+ */
+@Composable
+fun PixelPhoneIcon(
+    tint: Color = LanternAmber,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier.size(20.dp)) {
+        val u = size.width / 10f
+        // Top earpiece outlined box
+        drawRect(tint, Offset(1.5f * u, 1 * u), Size(2.5f * u, 1 * u))
+        drawRect(tint, Offset(1 * u, 2 * u), Size(1 * u, 2 * u))
+        drawRect(tint, Offset(3.5f * u, 2 * u), Size(1 * u, 1.5f * u))
+        // Curved stepped neck
+        drawRect(tint, Offset(2 * u, 4 * u), Size(1 * u, 1.5f * u))
+        drawRect(tint, Offset(3 * u, 5.2f * u), Size(1.3f * u, 1.3f * u))
+        drawRect(tint, Offset(4.3f * u, 6.2f * u), Size(1.5f * u, 1.3f * u))
+        // Bottom mouthpiece outlined box
+        drawRect(tint, Offset(5.8f * u, 7 * u), Size(1.2f * u, 1.5f * u))
+        drawRect(tint, Offset(6.5f * u, 5.5f * u), Size(2 * u, 1 * u))
+        drawRect(tint, Offset(8 * u, 6.5f * u), Size(1 * u, 2 * u))
+        drawRect(tint, Offset(6.2f * u, 8.2f * u), Size(2.3f * u, 1 * u))
+    }
+}
+
+/**
+ * Outlined Pixel Speaker Icon.
+ */
+@Composable
+fun PixelSpeakerIcon(
+    tint: Color = LanternAmber,
+    speakerOn: Boolean = true,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier.size(18.dp)) {
+        val u = size.width / 10f
+        // Speaker body outline
+        drawRect(tint, Offset(1 * u, 3.5f * u), Size(2 * u, 0.9f * u))
+        drawRect(tint, Offset(1 * u, 5.6f * u), Size(2 * u, 0.9f * u))
+        drawRect(tint, Offset(1 * u, 3.5f * u), Size(0.9f * u, 3 * u))
+        // Cone
+        drawRect(tint, Offset(3 * u, 2.5f * u), Size(1 * u, 1 * u))
+        drawRect(tint, Offset(4 * u, 1.5f * u), Size(1 * u, 1 * u))
+        drawRect(tint, Offset(3 * u, 6.5f * u), Size(1 * u, 1 * u))
+        drawRect(tint, Offset(4 * u, 7.5f * u), Size(1 * u, 1 * u))
+        drawRect(tint, Offset(5 * u, 1.5f * u), Size(0.9f * u, 7 * u))
+        if (speakerOn) {
+            drawRect(tint, Offset(7 * u, 3.5f * u), Size(0.9f * u, 3 * u))
+            drawRect(tint, Offset(8.5f * u, 2.2f * u), Size(0.9f * u, 5.6f * u))
+        }
+    }
+}
+
+/**
+ * Outlined Pixel Camera Icon.
+ */
+@Composable
+fun PixelCameraIcon(
+    tint: Color = TheirBubbleText,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier.size(16.dp)) {
+        val u = size.width / 10f
+        // Top prism bump
+        drawRect(tint, Offset(3.5f * u, 1.5f * u), Size(3 * u, 1 * u))
+        // Frame
+        drawRect(tint, Offset(1 * u, 2.5f * u), Size(8 * u, 1 * u))
+        drawRect(tint, Offset(1 * u, 7.5f * u), Size(8 * u, 1 * u))
+        drawRect(tint, Offset(1 * u, 2.5f * u), Size(1 * u, 6 * u))
+        drawRect(tint, Offset(8 * u, 2.5f * u), Size(1 * u, 6 * u))
+        // Lens square outline
+        drawRect(tint, Offset(4 * u, 4.2f * u), Size(2 * u, 0.9f * u))
+        drawRect(tint, Offset(4 * u, 6.1f * u), Size(2 * u, 0.9f * u))
+        drawRect(tint, Offset(3.5f * u, 4.5f * u), Size(0.9f * u, 2.2f * u))
+        drawRect(tint, Offset(5.6f * u, 4.5f * u), Size(0.9f * u, 2.2f * u))
+    }
+}
+
+/**
+ * Outlined Pixel Photo Gallery Icon.
+ */
+@Composable
+fun PixelPhotoIcon(
+    tint: Color = TheirBubbleText,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier.size(16.dp)) {
+        val u = size.width / 10f
+        // Frame
+        drawRect(tint, Offset(1 * u, 1.5f * u), Size(8 * u, 1 * u))
+        drawRect(tint, Offset(1 * u, 7.5f * u), Size(8 * u, 1 * u))
+        drawRect(tint, Offset(1 * u, 1.5f * u), Size(1 * u, 7 * u))
+        drawRect(tint, Offset(8 * u, 1.5f * u), Size(1 * u, 7 * u))
+        // Sun dot
+        drawRect(tint, Offset(3 * u, 3.3f * u), Size(1.3f * u, 1.3f * u))
+        // Mountain steps
+        drawRect(tint, Offset(2.2f * u, 6.2f * u), Size(1.5f * u, 1 * u))
+        drawRect(tint, Offset(3.5f * u, 5.2f * u), Size(1.5f * u, 1 * u))
+        drawRect(tint, Offset(4.8f * u, 4.5f * u), Size(1.5f * u, 1 * u))
+        drawRect(tint, Offset(6.2f * u, 5.5f * u), Size(1.5f * u, 1 * u))
+    }
+}
+
+/**
+ * Outlined Pixel File / Document Icon.
+ */
+@Composable
+fun PixelFileIcon(
+    tint: Color = TheirBubbleText,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier.size(16.dp)) {
+        val u = size.width / 10f
+        drawRect(tint, Offset(2 * u, 1 * u), Size(4 * u, 1 * u))
+        drawRect(tint, Offset(2 * u, 1 * u), Size(1 * u, 8 * u))
+        drawRect(tint, Offset(2 * u, 8 * u), Size(6 * u, 1 * u))
+        drawRect(tint, Offset(7 * u, 3.5f * u), Size(1 * u, 5.5f * u))
+        // Folded corner
+        drawRect(tint, Offset(5.5f * u, 1 * u), Size(1 * u, 2.5f * u))
+        drawRect(tint, Offset(5.5f * u, 3 * u), Size(2.5f * u, 1 * u))
+        // Text lines
+        drawRect(tint, Offset(3.6f * u, 4.8f * u), Size(2.8f * u, 0.8f * u))
+        drawRect(tint, Offset(3.6f * u, 6.2f * u), Size(2.2f * u, 0.8f * u))
+    }
+}
+
+/**
+ * Outlined Pixel Seal / View-Once Eye Icon.
+ */
+@Composable
+fun PixelSealIcon(
+    tint: Color = TheirBubbleText,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier.size(16.dp)) {
+        val u = size.width / 10f
+        drawRect(tint, Offset(2.5f * u, 2.5f * u), Size(5 * u, 1 * u))
+        drawRect(tint, Offset(2.5f * u, 6.5f * u), Size(5 * u, 1 * u))
+        drawRect(tint, Offset(1 * u, 3.5f * u), Size(1.5f * u, 1 * u))
+        drawRect(tint, Offset(7.5f * u, 3.5f * u), Size(1.5f * u, 1 * u))
+        drawRect(tint, Offset(1 * u, 5.5f * u), Size(1.5f * u, 1 * u))
+        drawRect(tint, Offset(7.5f * u, 5.5f * u), Size(1.5f * u, 1 * u))
+        drawRect(tint, Offset(0.5f * u, 4.5f * u), Size(1 * u, 1 * u))
+        drawRect(tint, Offset(8.5f * u, 4.5f * u), Size(1 * u, 1 * u))
+        // Pupil outline
+        drawRect(tint, Offset(4 * u, 4.2f * u), Size(2 * u, 1.6f * u))
+    }
+}
+
+/**
+ * Outlined Pixel Action Icons (Reply, Forward, Pin, Info, Edit, Trash, Block).
+ */
+@Composable
+fun PixelReplyIcon(tint: Color = TheirBubbleText, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.size(16.dp)) {
+        val u = size.width / 10f
+        drawRect(tint, Offset(1.5f * u, 4 * u), Size(5.5f * u, 1 * u))
+        drawRect(tint, Offset(2.5f * u, 3 * u), Size(1 * u, 1 * u))
+        drawRect(tint, Offset(3.5f * u, 2 * u), Size(1 * u, 1 * u))
+        drawRect(tint, Offset(2.5f * u, 5 * u), Size(1 * u, 1 * u))
+        drawRect(tint, Offset(3.5f * u, 6 * u), Size(1 * u, 1 * u))
+        drawRect(tint, Offset(7 * u, 4 * u), Size(1 * u, 3.5f * u))
+    }
+}
+
+@Composable
+fun PixelForwardIcon(tint: Color = TheirBubbleText, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.size(16.dp)) {
+        val u = size.width / 10f
+        drawRect(tint, Offset(3 * u, 4 * u), Size(5.5f * u, 1 * u))
+        drawRect(tint, Offset(6.5f * u, 3 * u), Size(1 * u, 1 * u))
+        drawRect(tint, Offset(5.5f * u, 2 * u), Size(1 * u, 1 * u))
+        drawRect(tint, Offset(6.5f * u, 5 * u), Size(1 * u, 1 * u))
+        drawRect(tint, Offset(5.5f * u, 6 * u), Size(1 * u, 1 * u))
+        drawRect(tint, Offset(2 * u, 4 * u), Size(1 * u, 3.5f * u))
+    }
+}
+
+@Composable
+fun PixelPinIcon(tint: Color = LanternAmber, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.size(16.dp)) {
+        val u = size.width / 10f
+        drawRect(tint, Offset(2.5f * u, 1.5f * u), Size(5 * u, 1 * u))
+        drawRect(tint, Offset(3 * u, 2.5f * u), Size(1 * u, 2.5f * u))
+        drawRect(tint, Offset(6 * u, 2.5f * u), Size(1 * u, 2.5f * u))
+        drawRect(tint, Offset(2 * u, 5 * u), Size(6 * u, 1 * u))
+        drawRect(tint, Offset(4.5f * u, 6 * u), Size(1 * u, 3 * u))
+    }
+}
+
+@Composable
+fun PixelInfoIcon(tint: Color = SecureGreen, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.size(16.dp)) {
+        val u = size.width / 10f
+        drawRect(tint, Offset(2 * u, 1 * u), Size(6 * u, 1 * u))
+        drawRect(tint, Offset(2 * u, 8 * u), Size(6 * u, 1 * u))
+        drawRect(tint, Offset(1 * u, 2 * u), Size(1 * u, 6 * u))
+        drawRect(tint, Offset(8 * u, 2 * u), Size(1 * u, 6 * u))
+        drawRect(tint, Offset(4.5f * u, 3 * u), Size(1 * u, 1 * u))
+        drawRect(tint, Offset(4.5f * u, 4.8f * u), Size(1 * u, 2.4f * u))
+    }
+}
+
+@Composable
+fun PixelEditIcon(tint: Color = LanternAmber, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.size(16.dp)) {
+        val u = size.width / 10f
+        drawRect(tint, Offset(6.5f * u, 1.5f * u), Size(2 * u, 1.5f * u))
+        drawRect(tint, Offset(5.2f * u, 2.8f * u), Size(1.5f * u, 1.5f * u))
+        drawRect(tint, Offset(3.9f * u, 4.1f * u), Size(1.5f * u, 1.5f * u))
+        drawRect(tint, Offset(2.6f * u, 5.4f * u), Size(1.5f * u, 1.5f * u))
+        drawRect(tint, Offset(1.5f * u, 7 * u), Size(1.5f * u, 1.5f * u))
+        drawRect(tint, Offset(1.5f * u, 8.5f * u), Size(7 * u, 0.8f * u))
+    }
+}
+
+@Composable
+fun PixelTrashIcon(tint: Color = MutedText, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.size(16.dp)) {
+        val u = size.width / 10f
+        drawRect(tint, Offset(3.5f * u, 1 * u), Size(3 * u, 1 * u))
+        drawRect(tint, Offset(1.5f * u, 2.2f * u), Size(7 * u, 1 * u))
+        drawRect(tint, Offset(2.2f * u, 3.2f * u), Size(1 * u, 5.5f * u))
+        drawRect(tint, Offset(6.8f * u, 3.2f * u), Size(1 * u, 5.5f * u))
+        drawRect(tint, Offset(2.2f * u, 8 * u), Size(5.6f * u, 1 * u))
+        drawRect(tint, Offset(4.5f * u, 4.2f * u), Size(1 * u, 3 * u))
+    }
+}
+
+@Composable
+fun PixelBlockIcon(tint: Color = WaxSealRed, modifier: Modifier = Modifier) {
+    Canvas(modifier = modifier.size(16.dp)) {
+        val u = size.width / 10f
+        drawRect(tint, Offset(2.5f * u, 1 * u), Size(5 * u, 1 * u))
+        drawRect(tint, Offset(2.5f * u, 8 * u), Size(5 * u, 1 * u))
+        drawRect(tint, Offset(1 * u, 2.5f * u), Size(1 * u, 5 * u))
+        drawRect(tint, Offset(8 * u, 2.5f * u), Size(1 * u, 5 * u))
+        for (i in 2..7) {
+            drawRect(tint, Offset(i * u, i * u), Size(1 * u, 1 * u))
+        }
+    }
+}
+
+/**
  * Scattered Pixel Stars (2-3px squares).
  */
 @Composable

@@ -50,5 +50,6 @@ interface ChatRepository {
     fun observeUsers(): Flow<List<UserProfile>>
     suspend fun getOrCreateChatWithUser(otherUserId: String, otherUserName: String): String
     suspend fun sendMessage(chatId: String, text: String)
+    suspend fun react(chatId: String, messageId: String, emoji: String)
     suspend fun syncCurrentUserProfile()
 }

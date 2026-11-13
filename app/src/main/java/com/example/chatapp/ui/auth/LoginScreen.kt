@@ -91,8 +91,6 @@ fun LoginScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(MothBgDark)
-            .statusBarsPadding()
-            .navigationBarsPadding()
             .testTag("login_screen"),
     ) {
         // Starfield background
@@ -101,6 +99,8 @@ fun LoginScreen(
         Column(
             modifier = Modifier
                 .fillMaxSize()
+                .statusBarsPadding()
+                .navigationBarsPadding()
                 .verticalScroll(scrollState)
                 .padding(horizontal = 24.dp),
             horizontalAlignment = Alignment.CenterHorizontally,

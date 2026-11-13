@@ -10,14 +10,18 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.compose.AsyncImage
 import com.example.chatapp.ui.theme.*
+import java.io.File
 
 /**
  * Pixel Lantern Sprite: matches the header and avatar lanterns in the screenshots.
@@ -230,29 +234,85 @@ fun PixelFirefly(
 }
 
 /**
- * 40px Stepped-Corner Pixel Avatar with simple face (eyes + mouth line).
+ * 40px (or custom size) Stepped-Corner Pixel Avatar with simple face (eyes + mouth line).
  */
 @Composable
 fun PixelFaceAvatar(
     color: Color,
     modifier: Modifier = Modifier,
+    size: Dp = 40.dp,
 ) {
     Box(
         modifier = modifier
-            .size(40.dp)
+            .size(size)
             .background(color, SteppedCornerShape(4.dp))
             .border(2.dp, Color(0xFF1A1633), SteppedCornerShape(4.dp)),
         contentAlignment = Alignment.Center,
     ) {
-        Canvas(modifier = Modifier.size(24.dp, 16.dp)) {
+        Canvas(modifier = Modifier.size(size * 0.6f, size * 0.4f)) {
             val eyeColor = Color(0xFF1A1633)
+            val w = this.size.width
+            val h = this.size.height
             // Left eye
-            drawRect(eyeColor, Offset(3.dp.toPx(), 2.dp.toPx()), Size(3.dp.toPx(), 4.dp.toPx()))
+            drawRect(eyeColor, Offset(w * 0.125f, h * 0.125f), Size(w * 0.125f, h * 0.25f))
             // Right eye
-            drawRect(eyeColor, Offset(17.dp.toPx(), 2.dp.toPx()), Size(3.dp.toPx(), 4.dp.toPx()))
+            drawRect(eyeColor, Offset(w * 0.71f, h * 0.125f), Size(w * 0.125f, h * 0.25f))
             // Mouth
-            drawRect(eyeColor, Offset(8.dp.toPx(), 11.dp.toPx()), Size(7.dp.toPx(), 2.5f.dp.toPx()))
+            drawRect(eyeColor, Offset(w * 0.33f, h * 0.68f), Size(w * 0.30f, h * 0.16f))
         }
+    }
+}
+
+/**
+ * Displays a custom avatar photo if set and present on disk, otherwise falls back to PixelFaceAvatar.
+ */
+@Composable
+fun UserAvatar(
+    avatarPath: String?,
+    color: Color,
+    modifier: Modifier = Modifier,
+    size: Dp = 40.dp,
+) {
+    val hasPhoto = !avatarPath.isNullOrBlank() && File(avatarPath).exists()
+    if (hasPhoto && avatarPath != null) {
+        val shape = SteppedCornerShape(4.dp)
+        AsyncImage(
+            model = File(avatarPath),
+            contentDescription = "User avatar",
+            contentScale = ContentScale.Crop,
+            modifier = modifier
+                .size(size)
+                .clip(shape)
+                .border(2.dp, TheirBubbleBorder, shape),
+        )
+    } else {
+        PixelFaceAvatar(color = color, modifier = modifier, size = size)
+    }
+}
+
+/**
+ * Pixel Sticker Square Icon for chat input bar (replaces emoji mode buttons).
+ */
+@Composable
+fun PixelStickerIcon(
+    tint: Color = LanternAmber,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier.size(20.dp)) {
+        val u = size.width / 8f
+        // Outer sticker frame with folded bottom-right corner
+        drawRect(tint, Offset(0f, 0f), Size(8 * u, 1 * u))
+        drawRect(tint, Offset(0f, 0f), Size(1 * u, 8 * u))
+        drawRect(tint, Offset(7 * u, 0f), Size(1 * u, 5 * u))
+        drawRect(tint, Offset(0f, 7 * u), Size(5 * u, 1 * u))
+        // Folded corner
+        drawRect(tint, Offset(5 * u, 5 * u), Size(2 * u, 1 * u))
+        drawRect(tint, Offset(5 * u, 5 * u), Size(1 * u, 2 * u))
+        drawRect(tint, Offset(6 * u, 6 * u), Size(1 * u, 1 * u))
+        // Little pixel smile inside
+        drawRect(tint, Offset(2.2f * u, 2.5f * u), Size(1 * u, 1.2f * u))
+        drawRect(tint, Offset(4.8f * u, 2.5f * u), Size(1 * u, 1.2f * u))
+        drawRect(tint, Offset(2.5f * u, 4.5f * u), Size(2.5f * u, 1 * u))
     }
 }
 

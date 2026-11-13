@@ -14,6 +14,7 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.text.BasicTextField
@@ -23,9 +24,12 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
@@ -61,19 +65,37 @@ fun ChatScreen(
 
     var draft by remember { mutableStateOf("") }
     var selectedSendType by remember { mutableStateOf(MessageType.REGULAR) }
-    var showCipherInfo by remember { mutableStateOf(false) }
 
     var showAttachMenu by remember { mutableStateOf(false) }
+    var showStickerTray by remember { mutableStateOf(false) }
+    var showPixelStickerMaker by remember { mutableStateOf(false) }
     var pendingAttachment by remember { mutableStateOf<PendingAttachment?>(null) }
     var attachmentError by remember { mutableStateOf<String?>(null) }
     var isPreparingAttachment by remember { mutableStateOf(false) }
     var fullScreenPhotoPath by remember { mutableStateOf<String?>(null) }
 
     BackHandler {
-        if (fullScreenPhotoPath != null) {
-            fullScreenPhotoPath = null
+        when {
+            fullScreenPhotoPath != null -> fullScreenPhotoPath = null
+            showPixelStickerMaker -> showPixelStickerMaker = false
+            else -> onBack()
+        }
+    }
+
+    // Broadcast real-time typing status to the other user
+    LaunchedEffect(draft, activeChatId) {
+        if (draft.isNotEmpty()) {
+            state.updateMyTypingStatus(activeChatId, true)
+            delay(3000L)
+            state.updateMyTypingStatus(activeChatId, false)
         } else {
-            onBack()
+            state.updateMyTypingStatus(activeChatId, false)
+        }
+    }
+
+    DisposableEffect(activeChatId) {
+        onDispose {
+            state.updateMyTypingStatus(activeChatId, false)
         }
     }
 
@@ -90,6 +112,22 @@ fun ChatScreen(
                     pendingAttachment = it
                 }.onFailure { err ->
                     attachmentError = err.localizedMessage ?: "failed to load photo"
+                }
+                isPreparingAttachment = false
+            }
+        }
+    }
+
+    val stickerPhotoLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.PickVisualMedia()
+    ) { uri ->
+        if (uri != null) {
+            isPreparingAttachment = true
+            attachmentError = null
+            coroutineScope.launch {
+                val res = state.createPhotoSticker(uri)
+                res.onFailure { err ->
+                    attachmentError = err.localizedMessage ?: "failed to create sticker"
                 }
                 isPreparingAttachment = false
             }
@@ -149,17 +187,6 @@ fun ChatScreen(
         }
     }
 
-    // Disappearing message embers timer ticker
-    LaunchedEffect(activeChatId, messages) {
-        val disappearingMsgs = messages.filter { it.type == MessageType.DISAPPEARING && it.embersRemaining > 0 }
-        if (disappearingMsgs.isNotEmpty()) {
-            delay(3500)
-            disappearingMsgs.forEach { msg ->
-                state.tickEmbers(activeChatId, msg.id)
-            }
-        }
-    }
-
     fun handleSend() {
         if ((draft.isNotBlank() || pendingAttachment != null) && !isPreparingAttachment) {
             val textToSend = draft.trim()
@@ -170,6 +197,7 @@ fun ChatScreen(
             selectedSendType = MessageType.REGULAR
             pendingAttachment = null
             showAttachMenu = false
+            showStickerTray = false
             attachmentError = null
 
             state.sendMessage(
@@ -197,17 +225,14 @@ fun ChatScreen(
             modifier = Modifier
                 .fillMaxSize()
                 .background(MothBgDark)
-                .statusBarsPadding()
-                .navigationBarsPadding()
-                .imePadding()
                 .testTag("chat_screen"),
         ) {
-            // 1. Header
+            // 1. Header merged seamlessly with status bar
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(MothHeaderBg)
-                    .border(width = 2.dp, color = MothDivider)
+                    .statusBarsPadding()
                     .padding(horizontal = 16.dp, vertical = 12.dp),
             ) {
                 Row(
@@ -223,7 +248,10 @@ fun ChatScreen(
                             .clickable(onClick = onBack)
                             .testTag("chat_back_button"),
                     ) {
-                        PixelFaceAvatar(color = activeConv?.avatarColor ?: LanternAmber)
+                        UserAvatar(
+                            avatarPath = activeConv?.avatarLocalPath,
+                            color = activeConv?.avatarColor ?: LanternAmber,
+                        )
                         Text(
                             text = chatTitle,
                             fontFamily = PixelifySans,
@@ -234,57 +262,33 @@ fun ChatScreen(
                         )
                     }
 
-                    // Right: "■ sealed" green indicator
+                    // Right: User Status (active / offline / last seen)
+                    val presence = state.activeContactPresence
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.clickable { showCipherInfo = !showCipherInfo },
+                        modifier = Modifier.testTag("contact_presence_status"),
                     ) {
                         Box(
                             modifier = Modifier
                                 .size(6.dp)
-                                .background(if (state.sealedCipherEnabled) SecureGreen else MutedText),
+                                .background(if (presence.isOnline) SecureGreen else MutedText),
                         )
                         Text(
-                            text = if (state.sealedCipherEnabled) "sealed" else "unsealed",
+                            text = presence.label,
                             fontFamily = PixelifySans,
-                            fontSize = 13.sp,
-                            color = if (state.sealedCipherEnabled) SecureGreen else MutedText,
+                            fontSize = 12.sp,
+                            color = if (presence.isOnline) SecureGreen else MutedText,
                         )
                     }
                 }
             }
-
-            // Cipher Information Toast
-            AnimatedVisibility(visible = showCipherInfo) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(TheirBubbleFill)
-                        .border(1.dp, SecureGreen)
-                        .padding(horizontal = 14.dp, vertical = 6.dp),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "channel: $chatTitle • stored locally on device",
-                            fontFamily = PixelifySans,
-                            fontSize = 11.sp,
-                            color = SecureGreen,
-                        )
-                        Text(
-                            text = "✕",
-                            fontFamily = PixelifySans,
-                            fontSize = 11.sp,
-                            color = MutedText,
-                            modifier = Modifier.clickable { showCipherInfo = false },
-                        )
-                    }
-                }
-            }
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(MothDivider),
+            )
 
             // 2. Chat Area with Starfield & Moon
             Box(
@@ -292,10 +296,8 @@ fun ChatScreen(
                     .weight(1f)
                     .fillMaxWidth(),
             ) {
-                // Night Starfield
                 PixelStarfield()
 
-                // Crescent Moon on bottom right
                 Box(
                     modifier = Modifier
                         .align(Alignment.BottomEnd)
@@ -314,28 +316,35 @@ fun ChatScreen(
                     contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp),
                 ) {
                     items(messages, key = { it.id }) { msg ->
-                        if (msg.type == MessageType.DISAPPEARING) {
-                            DisappearingMessageBubble(
-                                message = msg,
-                                litEmbers = msg.embersRemaining,
-                                onToggleReaction = { state.toggleReaction(activeChatId, msg.id) },
-                                onOpenPhoto = { fullScreenPhotoPath = it },
-                                onOpenFile = { path, mime -> openLocalFile(path, mime) },
-                            )
-                        } else if (msg.type == MessageType.VIEW_ONCE) {
-                            ViewOnceCard(
-                                message = msg,
-                                onOpen = { state.revealViewOnce(activeChatId, msg.id) },
-                                onOpenPhoto = { fullScreenPhotoPath = it },
-                                onOpenFile = { path, mime -> openLocalFile(path, mime) },
-                            )
-                        } else {
-                            StandardMessageBubble(
-                                message = msg,
-                                onToggleReaction = { state.toggleReaction(activeChatId, msg.id) },
-                                onOpenPhoto = { fullScreenPhotoPath = it },
-                                onOpenFile = { path, mime -> openLocalFile(path, mime) },
-                            )
+                        when (msg.type) {
+                            MessageType.DISAPPEARING -> {
+                                DisappearingMessageBubble(
+                                    message = msg,
+                                    litEmbers = msg.embersRemaining,
+                                    onToggleReaction = { state.toggleReaction(activeChatId, msg.id) },
+                                    onOpenPhoto = { fullScreenPhotoPath = it },
+                                    onOpenFile = { path, mime -> openLocalFile(path, mime) },
+                                )
+                            }
+                            MessageType.VIEW_ONCE -> {
+                                ViewOnceCard(
+                                    message = msg,
+                                    onOpen = { state.revealViewOnce(activeChatId, msg.id) },
+                                    onOpenPhoto = { fullScreenPhotoPath = it },
+                                    onOpenFile = { path, mime -> openLocalFile(path, mime) },
+                                )
+                            }
+                            MessageType.BURNED_TRACE -> {
+                                BurnedTraceBubble(message = msg)
+                            }
+                            MessageType.REGULAR -> {
+                                StandardMessageBubble(
+                                    message = msg,
+                                    onToggleReaction = { state.toggleReaction(activeChatId, msg.id) },
+                                    onOpenPhoto = { fullScreenPhotoPath = it },
+                                    onOpenFile = { path, mime -> openLocalFile(path, mime) },
+                                )
+                            }
                         }
                     }
 
@@ -391,7 +400,7 @@ fun ChatScreen(
                         .padding(horizontal = 16.dp, vertical = 5.dp),
                 ) {
                     Text(
-                        text = "preparing attachment...",
+                        text = "preparing...",
                         fontFamily = PixelifySans,
                         fontSize = 11.sp,
                         color = LanternAmber,
@@ -485,15 +494,109 @@ fun ChatScreen(
                 }
             }
 
-            // Attachment Picker Menu (Photo / File)
+            // Custom Stickers Tray (tap sticker icon inside input field)
+            AnimatedVisibility(visible = showStickerTray) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MothHeaderBg)
+                        .border(1.dp, MothDivider)
+                        .padding(horizontal = 12.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "my stickers",
+                            fontFamily = PixelifySans,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 12.sp,
+                            color = LanternAmber,
+                        )
+                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                            SteppedButton(
+                                text = "+ draw",
+                                onClick = { showPixelStickerMaker = true },
+                                backgroundColor = TheirBubbleFill,
+                                borderColor = LanternAmber,
+                                textColor = LanternAmber,
+                                cutSize = 3.dp,
+                                borderWidth = 1.dp,
+                                modifier = Modifier.testTag("draw_sticker_button"),
+                            )
+                            SteppedButton(
+                                text = "+ photo",
+                                onClick = {
+                                    stickerPhotoLauncher.launch(
+                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                    )
+                                },
+                                backgroundColor = TheirBubbleFill,
+                                borderColor = TheirBubbleBorder,
+                                textColor = TheirBubbleText,
+                                cutSize = 3.dp,
+                                borderWidth = 1.dp,
+                                modifier = Modifier.testTag("add_photo_sticker_button"),
+                            )
+                        }
+                    }
+
+                    if (state.customStickers.isEmpty()) {
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(vertical = 12.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = "no stickers yet — tap + draw or + photo to create one",
+                                fontFamily = PixelifySans,
+                                fontSize = 11.sp,
+                                color = MutedText,
+                            )
+                        }
+                    } else {
+                        LazyRow(
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            items(state.customStickers, key = { it.id }) { sticker ->
+                                StickerTrayItem(
+                                    sticker = sticker,
+                                    onSend = {
+                                        state.sendSticker(
+                                            chatId = activeChatId,
+                                            sticker = sticker,
+                                            asViewOnce = selectedSendType == MessageType.VIEW_ONCE,
+                                        )
+                                        selectedSendType = MessageType.REGULAR
+                                        showStickerTray = false
+                                    },
+                                    onDelete = { state.deleteSticker(sticker.id) },
+                                )
+                            }
+                        }
+                        Text(
+                            text = "tap to send • hold to delete",
+                            fontFamily = PixelifySans,
+                            fontSize = 10.sp,
+                            color = PlaceholderText,
+                        )
+                    }
+                }
+            }
+
+            // + (More) Menu: Photo, File, View Once
             AnimatedVisibility(visible = showAttachMenu) {
                 Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .background(MothHeaderBg)
                         .border(1.dp, MothDivider)
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        .padding(horizontal = 12.dp, vertical = 8.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     SteppedButton(
                         text = "🖼 photo",
@@ -523,11 +626,29 @@ fun ChatScreen(
                         textColor = TheirBubbleText,
                         cutSize = 3.dp,
                     )
+                    SteppedButton(
+                        text = "📜 once",
+                        onClick = {
+                            selectedSendType = if (selectedSendType == MessageType.VIEW_ONCE) {
+                                MessageType.REGULAR
+                            } else {
+                                MessageType.VIEW_ONCE
+                            }
+                            showAttachMenu = false
+                        },
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("toggle_view_once_button"),
+                        backgroundColor = if (selectedSendType == MessageType.VIEW_ONCE) MyBubbleFill else TheirBubbleFill,
+                        borderColor = if (selectedSendType == MessageType.VIEW_ONCE) MyBubbleBorder else TheirBubbleBorder,
+                        textColor = if (selectedSendType == MessageType.VIEW_ONCE) MyBubbleText else TheirBubbleText,
+                        cutSize = 3.dp,
+                    )
                 }
             }
 
-            // Send mode selector indicator (if user chose Disappearing or View Once)
-            if (selectedSendType != MessageType.REGULAR) {
+            // Send mode selector indicator when View Once is armed
+            if (selectedSendType == MessageType.VIEW_ONCE) {
                 Box(
                     modifier = Modifier
                         .fillMaxWidth()
@@ -540,8 +661,7 @@ fun ChatScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = if (selectedSendType == MessageType.DISAPPEARING) "🔥 sending as burning message (10 embers)"
-                            else "📜 sending as view-once sealed card",
+                            text = "📜 sending as view-once sealed card",
                             fontFamily = PixelifySans,
                             fontSize = 11.sp,
                             color = LanternAmber,
@@ -557,12 +677,20 @@ fun ChatScreen(
                 }
             }
 
-            // 3. Bottom Input Bar
+            // 3. Bottom Input Bar merged seamlessly behind system navigation bar / IME
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(1.dp)
+                    .background(MothDivider),
+            )
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
                     .background(MothHeaderBg)
-                    .border(width = 2.dp, color = MothDivider)
+                    .windowInsetsPadding(
+                        WindowInsets.navigationBars.union(WindowInsets.ime).only(WindowInsetsSides.Bottom)
+                    )
                     .padding(horizontal = 12.dp, vertical = 10.dp),
             ) {
                 Row(
@@ -570,14 +698,17 @@ fun ChatScreen(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    // Attach toggle button (+)
+                    // + (More) toggle button
                     SteppedBox(
                         modifier = Modifier
                             .size(44.dp)
-                            .clickable { showAttachMenu = !showAttachMenu }
+                            .clickable {
+                                showAttachMenu = !showAttachMenu
+                                if (showAttachMenu) showStickerTray = false
+                            }
                             .testTag("attach_button"),
                         backgroundColor = MothBgDark,
-                        borderColor = if (showAttachMenu || pendingAttachment != null) LanternAmber else TheirBubbleBorder,
+                        borderColor = if (showAttachMenu || pendingAttachment != null || selectedSendType == MessageType.VIEW_ONCE) LanternAmber else TheirBubbleBorder,
                         cutSize = 4.dp,
                         borderWidth = 2.dp,
                     ) {
@@ -590,12 +721,12 @@ fun ChatScreen(
                                 fontFamily = PixelifySans,
                                 fontSize = 18.sp,
                                 fontWeight = FontWeight.Bold,
-                                color = if (showAttachMenu || pendingAttachment != null) LanternAmber else TheirBubbleText,
+                                color = if (showAttachMenu || pendingAttachment != null || selectedSendType == MessageType.VIEW_ONCE) LanternAmber else TheirBubbleText,
                             )
                         }
                     }
 
-                    // Stepped-corner text field "say something"
+                    // Stepped-corner text field "say something" + Stickers button
                     SteppedBox(
                         modifier = Modifier
                             .weight(1f)
@@ -610,6 +741,7 @@ fun ChatScreen(
                                 .fillMaxSize()
                                 .padding(horizontal = 12.dp),
                             verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
                             Box(modifier = Modifier.weight(1f)) {
                                 if (draft.isEmpty()) {
@@ -641,28 +773,19 @@ fun ChatScreen(
                                 )
                             }
 
-                            // Message Type Quick Toggles (disappearing ember or view once seal)
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
+                            // Sticker Picker Button (replaces the 2 emoji toggles)
+                            Box(
+                                modifier = Modifier
+                                    .size(28.dp)
+                                    .clickable {
+                                        showStickerTray = !showStickerTray
+                                        if (showStickerTray) showAttachMenu = false
+                                    }
+                                    .testTag("sticker_picker_button"),
+                                contentAlignment = Alignment.Center,
                             ) {
-                                Text(
-                                    text = "🔥",
-                                    fontSize = 14.sp,
-                                    modifier = Modifier
-                                        .clickable {
-                                            selectedSendType = if (selectedSendType == MessageType.DISAPPEARING) MessageType.REGULAR else MessageType.DISAPPEARING
-                                        }
-                                        .testTag("toggle_disappearing_button"),
-                                )
-                                Text(
-                                    text = "📜",
-                                    fontSize = 14.sp,
-                                    modifier = Modifier
-                                        .clickable {
-                                            selectedSendType = if (selectedSendType == MessageType.VIEW_ONCE) MessageType.REGULAR else MessageType.VIEW_ONCE
-                                        }
-                                        .testTag("toggle_view_once_button"),
+                                PixelStickerIcon(
+                                    tint = if (showStickerTray) LanternAmber else MutedText
                                 )
                             }
                         }
@@ -680,6 +803,23 @@ fun ChatScreen(
                     }
                 }
             }
+        }
+
+        // Pixel Sticker Maker Modal
+        if (showPixelStickerMaker) {
+            PixelStickerMakerDialog(
+                onDismiss = { showPixelStickerMaker = false },
+                onSave = { label, grid ->
+                    coroutineScope.launch {
+                        val res = state.createPixelSticker(label, grid, 10)
+                        res.onSuccess {
+                            showPixelStickerMaker = false
+                        }.onFailure { err ->
+                            attachmentError = err.localizedMessage ?: "failed to save sticker"
+                        }
+                    }
+                },
+            )
         }
 
         // Fullscreen Photo Viewer Overlay
@@ -717,8 +857,248 @@ fun ChatScreen(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
+@Composable
+private fun StickerTrayItem(
+    sticker: MothSticker,
+    onSend: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    SteppedBox(
+        modifier = Modifier
+            .width(68.dp)
+            .combinedClickable(
+                onClick = onSend,
+                onLongClick = onDelete,
+            )
+            .testTag("sticker_item_${sticker.id}"),
+        backgroundColor = MothBgDark,
+        borderColor = TheirBubbleBorder,
+        cutSize = 3.dp,
+        borderWidth = 1.dp,
+    ) {
+        Column(
+            modifier = Modifier.padding(6.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(4.dp),
+        ) {
+            AsyncImage(
+                model = File(sticker.imageLocalPath),
+                contentDescription = sticker.label,
+                contentScale = ContentScale.Fit,
+                filterQuality = FilterQuality.None,
+                modifier = Modifier.size(48.dp),
+            )
+            Text(
+                text = sticker.label,
+                fontFamily = PixelifySans,
+                fontSize = 9.sp,
+                color = MutedText,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+        }
+    }
+}
+
+@Composable
+private fun PixelStickerMakerDialog(
+    onDismiss: () -> Unit,
+    onSave: (String, List<Int>) -> Unit,
+) {
+    val gridSize = 10
+    val cells = remember { mutableStateListOf<Int>().apply { repeat(gridSize * gridSize) { add(0) } } }
+    var selectedColor by remember { mutableIntStateOf(LanternAmber.toArgb()) }
+    var label by remember { mutableStateOf("") }
+
+    val palette = listOf(
+        LanternAmber,
+        LanternGlow,
+        WaxSealRed,
+        SecureGreen,
+        TheirBubbleText,
+        TheirBubbleBorder,
+        Color(0xFF70D6FF),
+        Color(0xFF1A1633),
+    )
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0xCC1A1633))
+            .clickable { onDismiss() }
+            .padding(20.dp),
+        contentAlignment = Alignment.Center,
+    ) {
+        SteppedBox(
+            modifier = Modifier
+                .fillMaxWidth()
+                .clickable(enabled = false) {}
+                .testTag("pixel_sticker_maker"),
+            backgroundColor = MothHeaderBg,
+            borderColor = LanternAmber,
+            cutSize = 4.dp,
+        ) {
+            Column(
+                modifier = Modifier.padding(16.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Text(
+                        text = "draw pixel sticker",
+                        fontFamily = PixelifySans,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 16.sp,
+                        color = LanternAmber,
+                    )
+                    Text(
+                        text = "✕",
+                        fontSize = 14.sp,
+                        color = MutedText,
+                        modifier = Modifier.clickable { onDismiss() },
+                    )
+                }
+
+                // Sticker name input
+                SteppedBox(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(38.dp),
+                    backgroundColor = MothBgDark,
+                    borderColor = TheirBubbleBorder,
+                    cutSize = 3.dp,
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .padding(horizontal = 10.dp),
+                        contentAlignment = Alignment.CenterStart,
+                    ) {
+                        if (label.isEmpty()) {
+                            Text(
+                                text = "sticker name (e.g. happy moth)",
+                                fontFamily = PixelifySans,
+                                fontSize = 12.sp,
+                                color = PlaceholderText,
+                            )
+                        }
+                        BasicTextField(
+                            value = label,
+                            onValueChange = { label = it },
+                            textStyle = TextStyle(
+                                fontFamily = PixelifySans,
+                                fontSize = 13.sp,
+                                color = TheirBubbleText,
+                            ),
+                            cursorBrush = SolidColor(LanternAmber),
+                            singleLine = true,
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                    }
+                }
+
+                // 10x10 Pixel Grid
+                Column(
+                    modifier = Modifier
+                        .background(MothBgDark)
+                        .border(2.dp, MothDivider)
+                        .padding(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                ) {
+                    for (r in 0 until gridSize) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                            for (c in 0 until gridSize) {
+                                val idx = r * gridSize + c
+                                val cellArgb = cells[idx]
+                                Box(
+                                    modifier = Modifier
+                                        .size(22.dp)
+                                        .background(if (cellArgb == 0) Color(0xFF231E4A) else Color(cellArgb))
+                                        .clickable {
+                                            cells[idx] = if (cells[idx] == selectedColor) 0 else selectedColor
+                                        },
+                                )
+                            }
+                        }
+                    }
+                }
+
+                // Palette + Eraser
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                        palette.forEach { color ->
+                            val argb = color.toArgb()
+                            val isSelected = selectedColor == argb
+                            Box(
+                                modifier = Modifier
+                                    .size(24.dp)
+                                    .background(color, SteppedCornerShape(2.dp))
+                                    .border(
+                                        width = if (isSelected) 2.dp else 1.dp,
+                                        color = if (isSelected) Color.White else MothDivider,
+                                        shape = SteppedCornerShape(2.dp),
+                                    )
+                                    .clickable { selectedColor = argb },
+                            )
+                        }
+                    }
+                    SteppedButton(
+                        text = "erase",
+                        onClick = { selectedColor = 0 },
+                        backgroundColor = if (selectedColor == 0) WaxSealRed else MothBgDark,
+                        borderColor = if (selectedColor == 0) WaxSealRed else MothDivider,
+                        textColor = if (selectedColor == 0) Color.White else MutedText,
+                        cutSize = 2.dp,
+                        borderWidth = 1.dp,
+                    )
+                }
+
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    SteppedButton(
+                        text = "clear",
+                        onClick = {
+                            for (i in cells.indices) cells[i] = 0
+                        },
+                        backgroundColor = TheirBubbleFill,
+                        borderColor = MothDivider,
+                        textColor = TheirBubbleText,
+                        modifier = Modifier.weight(1f),
+                        cutSize = 3.dp,
+                    )
+                    SteppedButton(
+                        text = "save sticker",
+                        onClick = {
+                            if (cells.any { it != 0 }) {
+                                onSave(label, cells.toList())
+                            }
+                        },
+                        backgroundColor = MyBubbleFill,
+                        borderColor = MyBubbleBorder,
+                        textColor = MyBubbleText,
+                        modifier = Modifier.weight(1f),
+                        cutSize = 3.dp,
+                    )
+                }
+            }
+        }
+    }
+}
+
 /**
  * Standard Message Bubble (Theirs on left in purple, Mine on right in amber).
+ * Stickers render cleanly without heavy bubble background.
  */
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -732,39 +1112,65 @@ private fun StandardMessageBubble(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = if (message.isMine) Alignment.End else Alignment.Start,
     ) {
-        val bg = if (message.isMine) MyBubbleFill else TheirBubbleFill
-        val border = if (message.isMine) MyBubbleBorder else TheirBubbleBorder
-        val textColor = if (message.isMine) MyBubbleText else TheirBubbleText
-
-        SteppedBox(
-            modifier = Modifier
-                .widthIn(max = 280.dp)
-                .combinedClickable(
-                    onClick = {
-                        if (message.attachmentType == null) {
-                            onToggleReaction()
-                        } else if (message.attachmentType == AttachmentType.PHOTO && !message.attachmentLocalPath.isNullOrBlank()) {
-                            onOpenPhoto(message.attachmentLocalPath)
-                        } else if (message.attachmentType == AttachmentType.FILE && !message.attachmentLocalPath.isNullOrBlank()) {
-                            onOpenFile(message.attachmentLocalPath, message.attachmentMimeType)
-                        }
-                    },
-                    onLongClick = { onToggleReaction() },
+        if (message.attachmentType == AttachmentType.STICKER && message.text.isBlank()) {
+            val path = message.attachmentLocalPath
+            if (!path.isNullOrBlank() && File(path).exists()) {
+                AsyncImage(
+                    model = File(path),
+                    contentDescription = message.attachmentName ?: "Sticker",
+                    contentScale = ContentScale.Fit,
+                    filterQuality = FilterQuality.None,
+                    modifier = Modifier
+                        .size(124.dp)
+                        .combinedClickable(
+                            onClick = { onToggleReaction() },
+                            onLongClick = { onToggleReaction() },
+                        )
+                        .testTag("sticker_bubble_${message.id}"),
                 )
-                .testTag("message_bubble_${message.id}"),
-            backgroundColor = bg,
-            borderColor = border,
-            cutSize = 4.dp,
-            borderWidth = 2.dp,
-        ) {
-            BubbleBodyContent(
-                message = message,
-                textColor = textColor,
+            } else {
+                Text(
+                    text = "[sticker]",
+                    fontFamily = PixelifySans,
+                    fontSize = 12.sp,
+                    color = MutedText,
+                )
+            }
+        } else {
+            val bg = if (message.isMine) MyBubbleFill else TheirBubbleFill
+            val border = if (message.isMine) MyBubbleBorder else TheirBubbleBorder
+            val textColor = if (message.isMine) MyBubbleText else TheirBubbleText
+
+            SteppedBox(
+                modifier = Modifier
+                    .widthIn(max = 280.dp)
+                    .combinedClickable(
+                        onClick = {
+                            if (message.attachmentType == null) {
+                                onToggleReaction()
+                            } else if (message.attachmentType == AttachmentType.PHOTO && !message.attachmentLocalPath.isNullOrBlank()) {
+                                onOpenPhoto(message.attachmentLocalPath)
+                            } else if (message.attachmentType == AttachmentType.FILE && !message.attachmentLocalPath.isNullOrBlank()) {
+                                onOpenFile(message.attachmentLocalPath, message.attachmentMimeType)
+                            }
+                        },
+                        onLongClick = { onToggleReaction() },
+                    )
+                    .testTag("message_bubble_${message.id}"),
+                backgroundColor = bg,
                 borderColor = border,
-                onOpenPhoto = onOpenPhoto,
-                onOpenFile = onOpenFile,
-                onLongClick = onToggleReaction,
-            )
+                cutSize = 4.dp,
+                borderWidth = 2.dp,
+            ) {
+                BubbleBodyContent(
+                    message = message,
+                    textColor = textColor,
+                    borderColor = border,
+                    onOpenPhoto = onOpenPhoto,
+                    onOpenFile = onOpenFile,
+                    onLongClick = onToggleReaction,
+                )
+            }
         }
 
         ReactionChip(message = message, onToggleReaction = onToggleReaction)
@@ -826,7 +1232,6 @@ private fun DisappearingMessageBubble(
 
         Spacer(modifier = Modifier.height(6.dp))
 
-        // Row of 10 ember squares + "burning down"
         Row(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(6.dp),
@@ -834,11 +1239,117 @@ private fun DisappearingMessageBubble(
         ) {
             DisappearingEmbers(total = 10, litCount = litEmbers)
             Text(
-                text = "burning down",
+                text = if (message.leaveTrace) "burning • leaves ash" else "burning down",
                 fontFamily = PixelifySans,
-                fontSize = 12.sp,
+                fontSize = 11.sp,
                 color = MutedText,
             )
+        }
+    }
+}
+
+/**
+ * Ash trace left behind when a 4-'!' burning message finishes burning.
+ * Only the sender can tap the trace to reveal a translucent memory of the original message.
+ */
+@Composable
+private fun BurnedTraceBubble(message: MothMessage) {
+    var isRevealed by remember(message.id) { mutableStateOf(false) }
+    val canPeek = message.isMine && message.text.isNotBlank()
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalAlignment = if (message.isMine) Alignment.End else Alignment.Start,
+    ) {
+        if (isRevealed && canPeek) {
+            SteppedBox(
+                modifier = Modifier
+                    .widthIn(max = 280.dp)
+                    .defaultMinSize(minHeight = 48.dp)
+                    .alpha(0.45f)
+                    .clickable { isRevealed = false }
+                    .testTag("burned_trace_revealed_${message.id}"),
+                backgroundColor = MyBubbleFill,
+                borderColor = MyBubbleBorder,
+                cutSize = 4.dp,
+                borderWidth = 2.dp,
+            ) {
+                Column(
+                    modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    Text(
+                        text = message.text,
+                        fontFamily = PixelifySans,
+                        fontSize = 15.sp,
+                        lineHeight = 20.sp,
+                        color = MyBubbleText,
+                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    ) {
+                        Text(
+                            text = "✦",
+                            fontSize = 10.sp,
+                            color = WaxSealRed,
+                        )
+                        Text(
+                            text = "ash memory • tap to hide",
+                            fontFamily = PixelifySans,
+                            fontSize = 10.sp,
+                            color = MyBubbleText.copy(alpha = 0.75f),
+                        )
+                    }
+                }
+            }
+        } else {
+            SteppedBox(
+                modifier = Modifier
+                    .widthIn(max = 260.dp)
+                    .then(
+                        if (canPeek) {
+                            Modifier
+                                .defaultMinSize(minHeight = 48.dp)
+                                .clickable { isRevealed = true }
+                        } else {
+                            Modifier
+                        }
+                    )
+                    .testTag("burned_trace_${message.id}"),
+                backgroundColor = MothHeaderBg,
+                borderColor = MothDivider,
+                cutSize = 4.dp,
+                borderWidth = 1.dp,
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = "✦",
+                        fontSize = 12.sp,
+                        color = WaxSealRed,
+                    )
+                    Column {
+                        Text(
+                            text = "a burning message turned to ash",
+                            fontFamily = PixelifySans,
+                            fontSize = 12.sp,
+                            color = MutedText,
+                        )
+                        if (canPeek) {
+                            Text(
+                                text = "tap trace to peek",
+                                fontFamily = PixelifySans,
+                                fontSize = 10.sp,
+                                color = PlaceholderText,
+                            )
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -878,8 +1389,11 @@ private fun ViewOnceCard(
                         val title = when (message.viewOnceStatus) {
                             ViewOnceStatus.UNOPENED -> "view once"
                             ViewOnceStatus.REVEALED -> message.text.ifBlank {
-                                if (message.attachmentType == AttachmentType.PHOTO) "photo revealed"
-                                else message.attachmentName ?: "file revealed"
+                                when (message.attachmentType) {
+                                    AttachmentType.PHOTO -> "photo revealed"
+                                    AttachmentType.STICKER -> "sticker revealed"
+                                    else -> message.attachmentName ?: "file revealed"
+                                }
                             }
                             ViewOnceStatus.BURNED -> "message burned"
                         }
@@ -972,14 +1486,15 @@ private fun AttachmentSection(
     val path = message.attachmentLocalPath
     val fileExists = !path.isNullOrBlank() && File(path).exists()
 
-    if (message.attachmentType == AttachmentType.PHOTO) {
+    if (message.attachmentType == AttachmentType.PHOTO || message.attachmentType == AttachmentType.STICKER) {
         if (fileExists && path != null) {
             AsyncImage(
                 model = File(path),
-                contentDescription = message.attachmentName ?: "Photo attachment",
-                contentScale = ContentScale.Crop,
+                contentDescription = message.attachmentName ?: "Image attachment",
+                contentScale = if (message.attachmentType == AttachmentType.STICKER) ContentScale.Fit else ContentScale.Crop,
+                filterQuality = if (message.attachmentType == AttachmentType.STICKER) FilterQuality.None else FilterQuality.Low,
                 modifier = Modifier
-                    .widthIn(min = 140.dp, max = 220.dp)
+                    .widthIn(min = 110.dp, max = 220.dp)
                     .heightIn(min = 100.dp, max = 180.dp)
                     .clip(SteppedCornerShape(3.dp))
                     .border(1.dp, borderColor, SteppedCornerShape(3.dp))
@@ -991,7 +1506,7 @@ private fun AttachmentSection(
             )
         } else {
             Text(
-                text = "[photo unavailable]",
+                text = "[image unavailable]",
                 fontFamily = PixelifySans,
                 fontSize = 12.sp,
                 color = textColor.copy(alpha = 0.7f),
@@ -1114,10 +1629,8 @@ private fun TypingIndicatorRow() {
         horizontalArrangement = Arrangement.spacedBy(8.dp),
         modifier = Modifier.padding(top = 4.dp),
     ) {
-        // Flapping pixel moth
         PixelMoth(isAnimated = true)
 
-        // Stepped bubble with 3 dots
         SteppedBox(
             backgroundColor = TheirBubbleFill,
             borderColor = TheirBubbleBorder,
@@ -1156,4 +1669,3 @@ private fun PulsingDot(delayMillis: Int) {
             .background(MutedText.copy(alpha = alpha)),
     )
 }
-

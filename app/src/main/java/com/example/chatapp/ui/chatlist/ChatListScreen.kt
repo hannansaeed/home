@@ -8,14 +8,19 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.ChatBubbleOutline
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
+import androidx.compose.material3.minimumInteractiveComponentSize
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -41,6 +46,20 @@ fun ChatListScreen(
     var newContactInitialMsg by remember { mutableStateOf("") }
     var newChatError by remember { mutableStateOf<String?>(null) }
 
+    var selectedProfileUsername by remember { mutableStateOf<String?>(null) }
+    var profileDetails by remember { mutableStateOf<UserProfileDetails?>(null) }
+    var isLoadingProfile by remember { mutableStateOf(false) }
+
+    LaunchedEffect(selectedProfileUsername) {
+        val target = selectedProfileUsername
+        if (target != null) {
+            isLoadingProfile = true
+            profileDetails = null
+            profileDetails = state.fetchUserProfile(target)
+            isLoadingProfile = false
+        }
+    }
+
     val filteredConversations = remember(state.conversations, searchQuery) {
         if (searchQuery.isBlank()) state.conversations
         else state.conversations.filter {
@@ -53,16 +72,14 @@ fun ChatListScreen(
         modifier = Modifier
             .fillMaxSize()
             .background(MothBgDark)
-            .statusBarsPadding()
-            .navigationBarsPadding()
             .testTag("chat_list_screen"),
     ) {
-        // 1. Header (matches Screenshot 1)
+        // 1. Header merged seamlessly with the top status bar
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(MothHeaderBg)
-                .border(width = 2.dp, color = MothDivider)
+                .statusBarsPadding()
                 .padding(horizontal = 16.dp, vertical = 12.dp),
         ) {
             Row(
@@ -208,6 +225,12 @@ fun ChatListScreen(
                 }
             }
         }
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(MothDivider),
+        )
 
         // Live Search Bar (stepped style)
         AnimatedVisibility(visible = showSearch && activeTab == "chats") {
@@ -288,7 +311,7 @@ fun ChatListScreen(
                                 PixelMoth(isAnimated = true)
                             }
 
-                            // Lantern Avatars Row (active contacts)
+                            // Lantern Avatars Row (lantern is only lit when the user is active)
                             Row(
                                 modifier = Modifier.fillMaxWidth(),
                                 horizontalArrangement = Arrangement.spacedBy(16.dp),
@@ -296,7 +319,7 @@ fun ChatListScreen(
                                 state.conversations.forEach { conv ->
                                     LitNowItem(
                                         name = conv.name,
-                                        isLit = conv.isLit,
+                                        isLit = state.isContactOnline(conv.name),
                                         onClick = {
                                             state.openConversation(conv.id)
                                             onOpenChat(conv.name)
@@ -342,6 +365,9 @@ fun ChatListScreen(
                                             state.openConversation(conv.id)
                                             onOpenChat(conv.name)
                                         },
+                                        onAvatarClick = {
+                                            selectedProfileUsername = conv.name
+                                        },
                                     )
                                     Box(
                                         modifier = Modifier
@@ -369,12 +395,18 @@ fun ChatListScreen(
             }
         }
 
-        // 4. Bottom Tab Bar (matches Screenshot 1: chats, games, empty, me)
+        // 4. Bottom Tab Bar merged seamlessly behind system navigation bar / gesture pill
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(1.dp)
+                .background(MothDivider),
+        )
         Box(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(MothHeaderBg)
-                .border(width = 2.dp, color = MothDivider)
+                .navigationBarsPadding()
                 .padding(horizontal = 16.dp, vertical = 8.dp),
         ) {
             Row(
@@ -384,7 +416,7 @@ fun ChatListScreen(
             ) {
                 TabItem(
                     label = "chats",
-                    iconSymbol = "💬",
+                    iconVector = Icons.Outlined.ChatBubbleOutline,
                     isSelected = activeTab == "chats",
                     onClick = { activeTab = "chats" },
                 )
@@ -604,6 +636,177 @@ fun ChatListScreen(
             }
         }
     }
+
+    // User Profile Details Modal (when clicking on a user's avatar in chat list)
+    selectedProfileUsername?.let { targetName ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0x991A1633))
+                .clickable { selectedProfileUsername = null }
+                .padding(24.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            SteppedBox(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = false) {}
+                    .testTag("user_profile_modal"),
+                backgroundColor = MothHeaderBg,
+                borderColor = LanternAmber,
+                cutSize = 4.dp,
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(18.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            text = "lantern profile",
+                            fontFamily = PixelifySans,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
+                            color = LanternAmber,
+                        )
+                        Text(
+                            text = "✕",
+                            fontSize = 14.sp,
+                            color = MutedText,
+                            modifier = Modifier.clickable { selectedProfileUsername = null },
+                        )
+                    }
+
+                    if (isLoadingProfile && profileDetails == null) {
+                        Text(
+                            text = "loading details...",
+                            fontFamily = PixelifySans,
+                            fontSize = 13.sp,
+                            color = MutedText,
+                            modifier = Modifier.padding(vertical = 24.dp),
+                        )
+                    } else {
+                        val convFallback = state.conversations.firstOrNull {
+                            it.name.equals(targetName, ignoreCase = true)
+                        }
+                        val details = profileDetails
+                        UserAvatar(
+                            avatarPath = details?.avatarPath ?: convFallback?.avatarLocalPath,
+                            color = details?.avatarColor ?: convFallback?.avatarColor ?: LanternAmber,
+                            size = 68.dp,
+                        )
+
+                        Text(
+                            text = "@${details?.username ?: targetName}",
+                            fontFamily = PixelifySans,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 18.sp,
+                            color = TheirBubbleText,
+                        )
+
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            val isOnline = details?.isOnline == true
+                            Box(
+                                modifier = Modifier
+                                    .size(7.dp)
+                                    .background(if (isOnline) SecureGreen else MutedText)
+                            )
+                            Text(
+                                text = details?.statusLabel ?: "offline",
+                                fontFamily = PixelifySans,
+                                fontSize = 12.sp,
+                                color = if (isOnline) SecureGreen else MutedText,
+                            )
+                        }
+
+                        SteppedBox(
+                            modifier = Modifier.fillMaxWidth(),
+                            backgroundColor = MothBgDark,
+                            borderColor = MothDivider,
+                            cutSize = 3.dp,
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(6.dp),
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Text(
+                                        text = "joined",
+                                        fontFamily = PixelifySans,
+                                        fontSize = 12.sp,
+                                        color = MutedText,
+                                    )
+                                    Text(
+                                        text = details?.joinedLabel ?: "unknown",
+                                        fontFamily = PixelifySans,
+                                        fontSize = 12.sp,
+                                        color = TheirBubbleText,
+                                    )
+                                }
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                ) {
+                                    Text(
+                                        text = "local messages",
+                                        fontFamily = PixelifySans,
+                                        fontSize = 12.sp,
+                                        color = MutedText,
+                                    )
+                                    Text(
+                                        text = "${details?.localMessageCount ?: 0}",
+                                        fontFamily = PixelifySans,
+                                        fontSize = 12.sp,
+                                        color = LanternAmber,
+                                    )
+                                }
+                            }
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        ) {
+                            SteppedButton(
+                                text = "close",
+                                onClick = { selectedProfileUsername = null },
+                                backgroundColor = TheirBubbleFill,
+                                borderColor = MothDivider,
+                                textColor = TheirBubbleText,
+                                modifier = Modifier.weight(1f),
+                                cutSize = 3.dp,
+                            )
+                            SteppedButton(
+                                text = "open chat",
+                                onClick = {
+                                    selectedProfileUsername = null
+                                    state.openConversation(targetName)
+                                    onOpenChat(targetName)
+                                },
+                                backgroundColor = MyBubbleFill,
+                                borderColor = MyBubbleBorder,
+                                textColor = MyBubbleText,
+                                modifier = Modifier.weight(1f),
+                                cutSize = 3.dp,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -631,6 +834,7 @@ private fun LitNowItem(
 private fun ConversationRow(
     conversation: MothConversation,
     onClick: () -> Unit,
+    onAvatarClick: () -> Unit,
 ) {
     Row(
         modifier = Modifier
@@ -641,8 +845,14 @@ private fun ConversationRow(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(14.dp),
     ) {
-        // 40px Stepped-Corner Face Avatar (simple eyes + mouth)
-        PixelFaceAvatar(color = conversation.avatarColor)
+        // 40px Stepped-Corner Avatar (tap to view user profile details)
+        UserAvatar(
+            avatarPath = conversation.avatarLocalPath,
+            color = conversation.avatarColor,
+            modifier = Modifier
+                .clickable(onClick = onAvatarClick)
+                .testTag("chat_avatar_${conversation.name}"),
+        )
 
         // Middle column: Name and Preview
         Column(modifier = Modifier.weight(1f)) {
@@ -732,7 +942,8 @@ private fun ConversationRow(
 @Composable
 private fun TabItem(
     label: String,
-    iconSymbol: String,
+    iconSymbol: String? = null,
+    iconVector: ImageVector? = null,
     isSelected: Boolean,
     onClick: () -> Unit,
 ) {
@@ -742,14 +953,30 @@ private fun TabItem(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(2.dp),
         modifier = Modifier
+            .minimumInteractiveComponentSize()
             .clickable(onClick = onClick)
-            .padding(horizontal = 12.dp, vertical = 4.dp),
+            .padding(horizontal = 12.dp, vertical = 4.dp)
+            .testTag("tab_$label"),
     ) {
-        Text(
-            text = iconSymbol,
-            fontSize = 16.sp,
-            color = color,
-        )
+        Box(
+            modifier = Modifier.height(22.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (iconVector != null) {
+                Icon(
+                    imageVector = iconVector,
+                    contentDescription = label,
+                    tint = color,
+                    modifier = Modifier.size(19.dp),
+                )
+            } else if (iconSymbol != null) {
+                Text(
+                    text = iconSymbol,
+                    fontSize = 16.sp,
+                    color = color,
+                )
+            }
+        }
         Text(
             text = label,
             fontFamily = PixelifySans,

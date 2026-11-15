@@ -49,26 +49,37 @@ fun LoginScreen(
     var showSignupPassphrase by remember { mutableStateOf(false) }
 
     var errorMessage by remember { mutableStateOf<String?>(null) }
+    var isSubmitting by remember { mutableStateOf(false) }
     var lanternSparkCount by remember { mutableIntStateOf(0) }
 
     val scrollState = rememberScrollState()
 
     fun performLogin() {
+        if (isSubmitting) return
         if (loginUsername.isBlank()) {
             errorMessage = "please enter your lantern handle"
         } else if (loginPassphrase.isBlank()) {
             errorMessage = "please enter your passphrase"
         } else {
+            isSubmitting = true
+            errorMessage = null
             state.loginUser(
                 username = loginUsername,
                 passphrase = loginPassphrase,
-                onSuccess = { onLoginSuccess() },
-                onError = { errorMessage = it }
+                onSuccess = {
+                    isSubmitting = false
+                    onLoginSuccess()
+                },
+                onError = {
+                    isSubmitting = false
+                    errorMessage = it
+                }
             )
         }
     }
 
     fun performSignup() {
+        if (isSubmitting) return
         if (signupUsername.isBlank()) {
             errorMessage = "please choose a lantern handle"
         } else if (signupPassphrase.isBlank()) {
@@ -78,11 +89,19 @@ fun LoginScreen(
         } else if (signupPassphrase != signupConfirmPassphrase) {
             errorMessage = "passphrases do not match"
         } else {
+            isSubmitting = true
+            errorMessage = null
             state.registerUser(
                 username = signupUsername,
                 passphrase = signupPassphrase,
-                onSuccess = { onLoginSuccess() },
-                onError = { errorMessage = it }
+                onSuccess = {
+                    isSubmitting = false
+                    onLoginSuccess()
+                },
+                onError = {
+                    isSubmitting = false
+                    errorMessage = it
+                }
             )
         }
     }
@@ -96,16 +115,28 @@ fun LoginScreen(
         // Starfield background
         PixelStarfield()
 
-        Column(
+        BoxWithConstraints(
             modifier = Modifier
                 .fillMaxSize()
                 .statusBarsPadding()
                 .navigationBarsPadding()
-                .verticalScroll(scrollState)
-                .padding(horizontal = 24.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
+                .imePadding(),
         ) {
-            // Hanging Lantern Header with flanking moths (matches Screenshot 3)
+            val containerHeight = maxHeight
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .verticalScroll(scrollState),
+            ) {
+                Column(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .defaultMinSize(minHeight = containerHeight)
+                        .padding(horizontal = 24.dp, vertical = 16.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.Center,
+                ) {
+                    // Hanging Lantern Header with flanking moths
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -144,7 +175,7 @@ fun LoginScreen(
 
             // Title & Tagline
             Text(
-                text = "moth hours",
+                text = "farlight",
                 fontFamily = PixelifySans,
                 fontWeight = FontWeight.Bold,
                 fontSize = 22.sp,
@@ -328,8 +359,9 @@ fun LoginScreen(
 
                 // Primary Button: "light the lantern" (WORKS AS LOGIN)
                 SteppedButton(
-                    text = "light the lantern",
+                    text = if (isSubmitting) "lighting..." else "light the lantern",
                     onClick = { performLogin() },
+                    enabled = !isSubmitting,
                     backgroundColor = MyBubbleFill,
                     borderColor = MyBubbleBorder,
                     textColor = MyBubbleText,
@@ -590,8 +622,9 @@ fun LoginScreen(
 
                 // Primary Button: "ignite new lantern" (CREATES NEW ACCOUNT / SIGNUP)
                 SteppedButton(
-                    text = "ignite new lantern",
+                    text = if (isSubmitting) "igniting..." else "ignite new lantern",
                     onClick = { performSignup() },
+                    enabled = !isSubmitting,
                     backgroundColor = MyBubbleFill,
                     borderColor = MyBubbleBorder,
                     textColor = MyBubbleText,
@@ -648,7 +681,8 @@ fun LoginScreen(
                 )
             }
 
-            Spacer(modifier = Modifier.height(36.dp))
+                }
+            }
         }
     }
 }

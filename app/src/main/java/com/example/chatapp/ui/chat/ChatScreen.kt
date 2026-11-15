@@ -4,18 +4,23 @@ import android.Manifest
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
+import android.widget.MediaController
+import android.widget.VideoView
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.animateColorAsState
 import androidx.compose.animation.core.*
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
@@ -50,6 +55,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import coil.compose.AsyncImage
@@ -80,7 +86,7 @@ fun ChatScreen(
     val messages = state.activeMessages
 
     var draft by remember { mutableStateOf("") }
-    var selectedSendType by remember { mutableStateOf(MessageType.REGULAR) }
+    var pendingViewOnce by remember { mutableStateOf(false) }
 
     var showAttachMenu by remember { mutableStateOf(false) }
     var showStickerTray by remember { mutableStateOf(false) }
@@ -89,15 +95,55 @@ fun ChatScreen(
     var attachmentError by remember { mutableStateOf<String?>(null) }
     var isPreparingAttachment by remember { mutableStateOf(false) }
     var fullScreenPhotoPath by remember { mutableStateOf<String?>(null) }
+    var fullScreenVideoPath by remember { mutableStateOf<String?>(null) }
+    var viewingViewOnceMessage by remember { mutableStateOf<MothMessage?>(null) }
+    var pendingStickerCropUri by remember { mutableStateOf<Uri?>(null) }
+    var pendingStickerCropLabel by remember { mutableStateOf("") }
+    var pendingSafSavePath by remember { mutableStateOf<String?>(null) }
+    var actionNotice by remember { mutableStateOf<String?>(null) }
 
-    // Reply, Edit, Forward, Actions, Info, Search, Pin, Group modals
+    // Reply, Edit, Forward, Actions, Info, Delete, Search, Profile modals
     var replyingToMessage by remember { mutableStateOf<MothMessage?>(null) }
     var editingMessage by remember { mutableStateOf<MothMessage?>(null) }
-    var actionModalMessage by remember { mutableStateOf<MothMessage?>(null) }
+    var selectedMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var showEditReactionsDialog by remember { mutableStateOf(false) }
     var infoModalMessage by remember { mutableStateOf<MothMessage?>(null) }
-    var forwardModalMessage by remember { mutableStateOf<MothMessage?>(null) }
+    var forwardModalMessages by remember { mutableStateOf<List<MothMessage>>(emptyList()) }
+    var deleteTargetMessages by remember { mutableStateOf<List<MothMessage>>(emptyList()) }
+    var highlightedMessageId by remember { mutableStateOf<String?>(null) }
     var tappedReceiptMsgId by remember { mutableStateOf<String?>(null) }
     var showGroupInfoModal by remember { mutableStateOf(false) }
+    var showContactProfileOverlay by remember { mutableStateOf(false) }
+
+    val selectedMessages = remember(messages, selectedMessageIds) {
+        messages.filter { it.id in selectedMessageIds }
+    }
+    LaunchedEffect(messages) {
+        val validIds = messages.map { it.id }.toSet()
+        val pruned = selectedMessageIds.intersect(validIds)
+        if (pruned != selectedMessageIds) {
+            selectedMessageIds = pruned
+        }
+    }
+
+    val hasDisappearingMessages = remember(messages) {
+        messages.any { it.type == MessageType.DISAPPEARING }
+    }
+    LaunchedEffect(activeChatId, hasDisappearingMessages) {
+        if (hasDisappearingMessages) {
+            while (true) {
+                state.tickBurningMessagesNow()
+                delay(500L)
+            }
+        }
+    }
+
+    LaunchedEffect(actionNotice) {
+        if (actionNotice != null) {
+            delay(2200L)
+            actionNotice = null
+        }
+    }
 
     // In-chat Search
     var showInChatSearch by remember { mutableStateOf(false) }
@@ -109,6 +155,56 @@ fun ChatScreen(
     var pendingVoiceCall by remember { mutableStateOf(false) }
 
     val listState = rememberLazyListState()
+
+    LaunchedEffect(highlightedMessageId) {
+        if (highlightedMessageId != null) {
+            delay(1450L)
+            highlightedMessageId = null
+        }
+    }
+
+    fun jumpToMessage(targetId: String) {
+        val idx = messages.indexOfFirst { it.id == targetId }
+        if (idx < 0) return
+        coroutineScope.launch {
+            highlightedMessageId = null
+            val layoutInfo = listState.layoutInfo
+            val visible = layoutInfo.visibleItemsInfo.firstOrNull { it.index == idx }
+            if (visible != null) {
+                val viewportCenter = layoutInfo.viewportStartOffset + layoutInfo.viewportSize.height / 2
+                val itemCenter = visible.offset + visible.size / 2
+                val delta = (itemCenter - viewportCenter).toFloat()
+                if (kotlin.math.abs(delta) > 6f) {
+                    listState.animateScrollBy(
+                        value = delta,
+                        animationSpec = tween(durationMillis = 420, easing = FastOutSlowInEasing),
+                    )
+                }
+            } else {
+                val anchorIdx = layoutInfo.visibleItemsInfo.firstOrNull()?.index ?: idx
+                val step = kotlin.math.abs(idx - anchorIdx)
+                if (step > 25) {
+                    val preIdx = if (idx < anchorIdx) idx + 15 else (idx - 15).coerceAtLeast(0)
+                    listState.scrollToItem(preIdx)
+                }
+                listState.animateScrollToItem(idx)
+                val postLayout = listState.layoutInfo
+                val targetVisible = postLayout.visibleItemsInfo.firstOrNull { it.index == idx }
+                if (targetVisible != null && postLayout.viewportSize.height > 0) {
+                    val viewportCenter = postLayout.viewportStartOffset + postLayout.viewportSize.height / 2
+                    val itemCenter = targetVisible.offset + targetVisible.size / 2
+                    val delta = (itemCenter - viewportCenter).toFloat()
+                    if (kotlin.math.abs(delta) > 6f) {
+                        listState.animateScrollBy(
+                            value = delta,
+                            animationSpec = tween(durationMillis = 260, easing = FastOutSlowInEasing),
+                        )
+                    }
+                }
+            }
+            highlightedMessageId = targetId
+        }
+    }
 
     val pinnedMessages = remember(messages) {
         messages.filter { it.isPinned && !it.isDeleted }
@@ -135,12 +231,23 @@ fun ChatScreen(
 
     BackHandler {
         when {
+            viewingViewOnceMessage != null -> {
+                viewingViewOnceMessage?.let { vo ->
+                    state.markViewOnceOpenedAndBurn(activeChatId, vo.id)
+                }
+                viewingViewOnceMessage = null
+            }
+            pendingStickerCropUri != null -> pendingStickerCropUri = null
             fullScreenPhotoPath != null -> fullScreenPhotoPath = null
+            fullScreenVideoPath != null -> fullScreenVideoPath = null
             showPixelStickerMaker -> showPixelStickerMaker = false
-            actionModalMessage != null -> actionModalMessage = null
+            showEditReactionsDialog -> showEditReactionsDialog = false
+            deleteTargetMessages.isNotEmpty() -> deleteTargetMessages = emptyList()
+            selectedMessageIds.isNotEmpty() -> selectedMessageIds = emptySet()
             infoModalMessage != null -> infoModalMessage = null
-            forwardModalMessage != null -> forwardModalMessage = null
+            forwardModalMessages.isNotEmpty() -> forwardModalMessages = emptyList()
             showGroupInfoModal -> showGroupInfoModal = false
+            showContactProfileOverlay -> showContactProfileOverlay = false
             showInChatSearch -> {
                 showInChatSearch = false
                 inChatSearchQuery = ""
@@ -176,9 +283,9 @@ fun ChatScreen(
             attachmentError = null
             showAttachMenu = false
             coroutineScope.launch {
-                val res = state.preparePhotoAttachment(uri)
+                val res = state.prepareMediaAttachment(uri)
                 res.onSuccess { pendingAttachment = it }
-                    .onFailure { attachmentError = it.localizedMessage ?: "failed to load photo" }
+                    .onFailure { attachmentError = it.localizedMessage ?: "failed to load media" }
                 isPreparingAttachment = false
             }
         }
@@ -254,12 +361,46 @@ fun ChatScreen(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
         if (uri != null) {
-            isPreparingAttachment = true
             attachmentError = null
+            pendingStickerCropLabel = state.resolveUriDisplayName(uri)
+                .substringBeforeLast('.')
+                .take(24)
+                .ifBlank { "sticker" }
+            pendingStickerCropUri = uri
+        }
+    }
+
+    val safSaveDocumentLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.CreateDocument("*/*")
+    ) { destUri ->
+        val srcPath = pendingSafSavePath
+        pendingSafSavePath = null
+        if (destUri != null && srcPath != null) {
             coroutineScope.launch {
-                val res = state.createPhotoSticker(uri)
-                res.onFailure { err -> attachmentError = err.localizedMessage ?: "failed to create sticker" }
-                isPreparingAttachment = false
+                val res = state.writeLocalFileToUri(srcPath, destUri)
+                res.onSuccess { actionNotice = "saved to device storage" }
+                    .onFailure { attachmentError = it.localizedMessage ?: "failed to save media" }
+            }
+        }
+    }
+
+    fun saveMediaFromChat(
+        localPath: String,
+        attachmentType: AttachmentType?,
+        mimeType: String?,
+        fileName: String?,
+    ) {
+        coroutineScope.launch {
+            val res = state.saveMediaToDevice(localPath, attachmentType, mimeType, fileName)
+            res.onSuccess { msg ->
+                actionNotice = msg
+            }.onFailure { err ->
+                if (err is SafExportRequiredException) {
+                    pendingSafSavePath = localPath
+                    safSaveDocumentLauncher.launch(err.fileName)
+                } else {
+                    attachmentError = err.localizedMessage ?: "failed to save media"
+                }
             }
         }
     }
@@ -324,12 +465,12 @@ fun ChatScreen(
 
         if ((draft.isNotBlank() || pendingAttachment != null) && !isPreparingAttachment) {
             val textToSend = draft.trim()
-            val typeToSend = selectedSendType
             val attachmentToSend = pendingAttachment
+            val typeToSend = if (pendingViewOnce && attachmentToSend != null) MessageType.VIEW_ONCE else MessageType.REGULAR
             val replyTarget = replyingToMessage
 
             draft = ""
-            selectedSendType = MessageType.REGULAR
+            pendingViewOnce = false
             pendingAttachment = null
             replyingToMessage = null
             showAttachMenu = false
@@ -376,7 +517,7 @@ fun ChatScreen(
                 .background(MothBgDark)
                 .testTag("chat_screen"),
         ) {
-            // 1. Header merged seamlessly with status bar
+            // 1. Header (Normal Contact Bar OR Contextual WhatsApp-style Action Bar when message selected)
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -384,122 +525,210 @@ fun ChatScreen(
                     .statusBarsPadding()
                     .padding(horizontal = 12.dp, vertical = 10.dp),
             ) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    // Left: Back + Avatar + Title
+                if (selectedMessages.isNotEmpty()) {
+                    val singleSelected = selectedMessages.singleOrNull()
+                    val nonDeletedSelected = selectedMessages.filter { !it.isDeleted }
+                    val allStarred = nonDeletedSelected.isNotEmpty() && nonDeletedSelected.all { it.isStarred }
                     Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("contextual_action_bar"),
                         verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        modifier = Modifier.weight(1f),
+                        horizontalArrangement = Arrangement.SpaceBetween,
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clickable(onClick = onBack)
-                                .testTag("chat_back_button"),
-                            contentAlignment = Alignment.Center,
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            PixelBackArrowIcon(
-                                tint = LanternAmber,
-                                modifier = Modifier.size(26.dp),
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clickable { selectedMessageIds = emptySet() }
+                                    .testTag("contextual_close_button"),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                PixelBackArrowIcon(tint = LanternAmber, modifier = Modifier.size(24.dp))
+                            }
+                            Text(
+                                text = "${selectedMessages.size}",
+                                fontFamily = PixelifySans,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 16.sp,
+                                color = LanternAmber,
+                                modifier = Modifier.testTag("contextual_selected_count"),
                             )
                         }
 
                         Row(
                             verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                            modifier = Modifier.clickable {
-                                if (isGroup) showGroupInfoModal = true else onBack()
-                            },
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
-                            if (isGroup && activeConv != null) {
-                                SteppedBox(
-                                    modifier = Modifier.size(36.dp),
-                                    backgroundColor = activeConv.avatarColor,
-                                    borderColor = LanternAmber,
-                                    cutSize = 3.dp,
-                                    borderWidth = 1.dp,
+                            if (nonDeletedSelected.isNotEmpty()) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(38.dp)
+                                        .clickable {
+                                            state.setMessagesStarred(
+                                                activeChatId,
+                                                nonDeletedSelected.map { it.id },
+                                                !allStarred,
+                                            )
+                                            selectedMessageIds = emptySet()
+                                        }
+                                        .testTag("action_star_button"),
+                                    contentAlignment = Alignment.Center,
                                 ) {
-                                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                        Text(text = activeConv.groupIcon, fontSize = 16.sp)
-                                    }
+                                    PixelStarIcon(tint = LanternAmber, filled = allStarred, modifier = Modifier.size(18.dp))
                                 }
-                            } else {
-                                UserAvatar(
-                                    avatarPath = activeConv?.avatarLocalPath,
-                                    color = activeConv?.avatarColor ?: LanternAmber,
-                                    size = 36.dp,
-                                )
-                            }
 
-                            Column {
-                                Text(
-                                    text = activeConv?.name ?: chatTitle,
-                                    fontFamily = PixelifySans,
-                                    fontSize = 16.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = LanternAmber,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                                val presence = state.activeContactPresence
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(5.dp),
-                                    modifier = Modifier.testTag("contact_presence_status"),
+                                Box(
+                                    modifier = Modifier
+                                        .size(38.dp)
+                                        .clickable {
+                                            forwardModalMessages = nonDeletedSelected
+                                            selectedMessageIds = emptySet()
+                                        }
+                                        .testTag("action_forward_button"),
+                                    contentAlignment = Alignment.Center,
                                 ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(5.dp)
-                                            .background(if (presence.isOnline) SecureGreen else MutedText),
-                                    )
-                                    Text(
-                                        text = if (isGroup) "tap for members • ${presence.label}" else presence.label,
-                                        fontFamily = PixelifySans,
-                                        fontSize = 11.sp,
-                                        color = if (presence.isOnline) SecureGreen else MutedText,
-                                    )
+                                    PixelForwardIcon(tint = TheirBubbleText, modifier = Modifier.size(18.dp))
                                 }
                             }
-                        }
-                    }
 
-                    // Right Actions: Voice Call (1:1) + In-Chat Search
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        if (!isGroup && !chatTitle.equals("support", ignoreCase = true)) {
                             Box(
                                 modifier = Modifier
                                     .size(38.dp)
-                                    .clickable { launchCallFromChat() }
-                                    .testTag("chat_voice_call_button"),
+                                    .clickable {
+                                        deleteTargetMessages = selectedMessages
+                                        selectedMessageIds = emptySet()
+                                    }
+                                    .testTag("action_delete_button"),
                                 contentAlignment = Alignment.Center,
                             ) {
-                                PixelPhoneIcon(
-                                    tint = LanternAmber,
-                                    modifier = Modifier.size(22.dp),
-                                )
+                                PixelTrashIcon(tint = WaxSealRed, modifier = Modifier.size(18.dp))
                             }
                         }
-                        Box(
-                            modifier = Modifier
-                                .size(40.dp)
-                                .clickable {
-                                    showInChatSearch = !showInChatSearch
-                                    if (!showInChatSearch) inChatSearchQuery = ""
-                                }
-                                .testTag("in_chat_search_button"),
-                            contentAlignment = Alignment.Center,
+                    }
+                } else {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                    ) {
+                        // Left: Back + Avatar + Title (Avatar/Name opens Contact Profile or Group Info)
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            modifier = Modifier.weight(1f),
                         ) {
-                            PixelSearchIcon(
-                                tint = if (showInChatSearch) TheirBubbleText else LanternAmber,
-                                modifier = Modifier.size(20.dp),
-                            )
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clickable(onClick = onBack)
+                                    .testTag("chat_back_button"),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                PixelBackArrowIcon(
+                                    tint = LanternAmber,
+                                    modifier = Modifier.size(26.dp),
+                                )
+                            }
+
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                modifier = Modifier
+                                    .clickable {
+                                        if (isGroup) showGroupInfoModal = true else showContactProfileOverlay = true
+                                    }
+                                    .testTag("chat_header_profile_button"),
+                            ) {
+                                if (isGroup && activeConv != null) {
+                                    SteppedBox(
+                                        modifier = Modifier.size(36.dp),
+                                        backgroundColor = activeConv.avatarColor,
+                                        borderColor = LanternAmber,
+                                        cutSize = 3.dp,
+                                        borderWidth = 1.dp,
+                                    ) {
+                                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                            Text(text = activeConv.groupIcon, fontSize = 16.sp)
+                                        }
+                                    }
+                                } else {
+                                    UserAvatar(
+                                        avatarPath = activeConv?.avatarLocalPath,
+                                        color = activeConv?.avatarColor ?: LanternAmber,
+                                        size = 36.dp,
+                                    )
+                                }
+
+                                Column {
+                                    Text(
+                                        text = activeConv?.name ?: chatTitle,
+                                        fontFamily = PixelifySans,
+                                        fontSize = 16.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = LanternAmber,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                    val presence = state.activeContactPresence
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                        modifier = Modifier.testTag("contact_presence_status"),
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(5.dp)
+                                                .background(if (presence.isOnline) SecureGreen else MutedText),
+                                        )
+                                        Text(
+                                            text = if (isGroup) "tap for members • ${presence.label}" else presence.label,
+                                            fontFamily = PixelifySans,
+                                            fontSize = 11.sp,
+                                            color = if (presence.isOnline) SecureGreen else MutedText,
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Right Actions: Voice Call (1:1) + In-Chat Search
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        ) {
+                            if (!isGroup && !chatTitle.equals("support", ignoreCase = true)) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(38.dp)
+                                        .clickable { launchCallFromChat() }
+                                        .testTag("chat_voice_call_button"),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    PixelPhoneIcon(
+                                        tint = LanternAmber,
+                                        modifier = Modifier.size(22.dp),
+                                    )
+                                }
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .size(40.dp)
+                                    .clickable {
+                                        showInChatSearch = !showInChatSearch
+                                        if (!showInChatSearch) inChatSearchQuery = ""
+                                    }
+                                    .testTag("in_chat_search_button"),
+                                contentAlignment = Alignment.Center,
+                            ) {
+                                PixelSearchIcon(
+                                    tint = if (showInChatSearch) TheirBubbleText else LanternAmber,
+                                    modifier = Modifier.size(20.dp),
+                                )
+                            }
                         }
                     }
                 }
@@ -548,30 +777,32 @@ fun ChatScreen(
                     if (inChatSearchQuery.isNotBlank()) {
                         val counterText = if (searchMatches.isEmpty()) "0/0" else "${searchCursorIdx + 1}/${searchMatches.size}"
                         Text(text = counterText, fontFamily = PixelifySans, fontSize = 11.sp, color = LanternAmber)
-                        Text(
-                            text = "↑",
-                            fontSize = 16.sp,
-                            color = LanternAmber,
+                        Box(
                             modifier = Modifier
+                                .size(32.dp)
                                 .clickable {
                                     if (searchMatches.isNotEmpty()) {
                                         searchCursorIdx = if (searchCursorIdx > 0) searchCursorIdx - 1 else searchMatches.lastIndex
                                     }
                                 }
-                                .padding(horizontal = 4.dp),
-                        )
-                        Text(
-                            text = "↓",
-                            fontSize = 16.sp,
-                            color = LanternAmber,
+                                .testTag("in_chat_search_prev"),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            PixelArrowUpIcon(tint = LanternAmber, modifier = Modifier.size(18.dp))
+                        }
+                        Box(
                             modifier = Modifier
+                                .size(32.dp)
                                 .clickable {
                                     if (searchMatches.isNotEmpty()) {
                                         searchCursorIdx = (searchCursorIdx + 1) % searchMatches.size
                                     }
                                 }
-                                .padding(horizontal = 4.dp),
-                        )
+                                .testTag("in_chat_search_next"),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            PixelArrowDownIcon(tint = LanternAmber, modifier = Modifier.size(18.dp))
+                        }
                     }
                     Text(
                         text = "✕",
@@ -597,10 +828,7 @@ fun ChatScreen(
                         .background(TheirBubbleFill)
                         .border(1.dp, LanternAmber)
                         .clickable {
-                            val idxInList = messages.indexOfFirst { it.id == pinned.id }
-                            if (idxInList >= 0) {
-                                coroutineScope.launch { listState.animateScrollToItem(idxInList) }
-                            }
+                            jumpToMessage(pinned.id)
                             if (pinnedMessages.size > 1) {
                                 pinnedBannerIdx = (safeIdx + 1) % pinnedMessages.size
                             }
@@ -615,7 +843,7 @@ fun ChatScreen(
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        Text(text = "📌", fontSize = 12.sp)
+                        PixelPinIcon(tint = LanternAmber, modifier = Modifier.size(14.dp))
                         Text(
                             text = pinned.text.ifBlank { pinned.attachmentName ?: "pinned message" },
                             fontFamily = PixelifySans,
@@ -664,63 +892,235 @@ fun ChatScreen(
                     items(messages, key = { it.id }) { msg ->
                         val isSearchMatch = inChatSearchQuery.isNotBlank() &&
                             !msg.isDeleted && msg.text.contains(inChatSearchQuery.trim(), ignoreCase = true)
+                        val isSelected = msg.id in selectedMessageIds
+                        var tapCount by remember(msg.id) { mutableIntStateOf(0) }
+                        var lastTapAt by remember(msg.id) { mutableLongStateOf(0L) }
 
-                        SwipeToReplyContainer(
-                            enabled = !msg.isDeleted,
-                            onSwipedToReply = { replyingToMessage = msg },
+                        val toggleSelect = {
+                            selectedMessageIds = if (msg.id in selectedMessageIds) {
+                                selectedMessageIds - msg.id
+                            } else {
+                                selectedMessageIds + msg.id
+                            }
+                        }
+                        val onTapBubbleAction = {
+                            if (selectedMessageIds.isNotEmpty()) {
+                                toggleSelect()
+                            } else if (!msg.isDeleted) {
+                                val now = System.currentTimeMillis()
+                                val nextCount = if (now - lastTapAt <= 750L) tapCount + 1 else 1
+                                lastTapAt = now
+                                if (nextCount >= 3) {
+                                    tapCount = 0
+                                    lastTapAt = 0L
+                                    state.toggleStarMessage(activeChatId, msg.id)
+                                } else {
+                                    tapCount = nextCount
+                                    tappedReceiptMsgId = if (tappedReceiptMsgId == msg.id) null else msg.id
+                                }
+                            }
+                        }
+
+                        val isJumpHighlighted = highlightedMessageId == msg.id
+                        val rowHighlightColor by animateColorAsState(
+                            targetValue = when {
+                                isSelected -> MyBubbleFill.copy(alpha = 0.22f)
+                                isJumpHighlighted -> LanternAmber.copy(alpha = 0.24f)
+                                else -> Color.Transparent
+                            },
+                            animationSpec = tween(durationMillis = 300),
+                            label = "msg_row_highlight",
+                        )
+
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(rowHighlightColor)
+                                .then(
+                                    if (selectedMessageIds.isNotEmpty()) {
+                                        Modifier.clickable { toggleSelect() }
+                                    } else {
+                                        Modifier
+                                    }
+                                ),
+                            horizontalAlignment = if (msg.isMine) Alignment.End else Alignment.Start,
                         ) {
-                            when (msg.type) {
-                                MessageType.DISAPPEARING -> {
-                                    DisappearingMessageBubble(
-                                        message = msg,
-                                        litEmbers = msg.embersRemaining,
-                                        fontScale = state.messageFontScale,
-                                        isGroup = isGroup,
-                                        isReceiptExpanded = tappedReceiptMsgId == msg.id,
-                                        highlightQuery = if (isSearchMatch) inChatSearchQuery.trim() else "",
-                                        onTapBubble = {
-                                            tappedReceiptMsgId = if (tappedReceiptMsgId == msg.id) null else msg.id
-                                        },
-                                        onLongPress = { actionModalMessage = msg },
-                                        onToggleEmojiReaction = { emoji -> state.reactToMessage(activeChatId, msg.id, emoji) },
-                                        onOpenPhoto = { fullScreenPhotoPath = it },
-                                        onOpenFile = { path, mime -> openLocalFile(path, mime) },
-                                        voicePlayer = state.voicePlayer,
-                                    )
+                            SwipeToReplyContainer(
+                                enabled = !msg.isDeleted && selectedMessageIds.isEmpty(),
+                                onSwipedToReply = { replyingToMessage = msg },
+                            ) {
+                                when (msg.type) {
+                                    MessageType.DISAPPEARING -> {
+                                        DisappearingMessageBubble(
+                                            message = msg,
+                                            litEmbers = msg.embersRemaining,
+                                            fontScale = state.messageFontScale,
+                                            isGroup = isGroup,
+                                            isReceiptExpanded = tappedReceiptMsgId == msg.id,
+                                            highlightQuery = if (isSearchMatch) inChatSearchQuery.trim() else "",
+                                            isJumpHighlighted = isJumpHighlighted,
+                                            onTapBubble = onTapBubbleAction,
+                                            onLongPress = toggleSelect,
+                                            onToggleEmojiReaction = { emoji -> state.reactToMessage(activeChatId, msg.id, emoji) },
+                                            onOpenPhoto = { path ->
+                                                if (selectedMessageIds.isNotEmpty()) toggleSelect() else fullScreenPhotoPath = path
+                                            },
+                                            onOpenVideo = { path ->
+                                                if (selectedMessageIds.isNotEmpty()) toggleSelect() else fullScreenVideoPath = path
+                                            },
+                                            onOpenFile = { path, mime ->
+                                                if (selectedMessageIds.isNotEmpty()) toggleSelect() else openLocalFile(path, mime)
+                                            },
+                                            onJumpToReply = { replyId ->
+                                                if (selectedMessageIds.isNotEmpty()) toggleSelect() else jumpToMessage(replyId)
+                                            },
+                                            onVoicePlayStarted = { startedMsg ->
+                                                state.markVoiceNoteListened(activeChatId, startedMsg)
+                                            },
+                                            voicePlayer = state.voicePlayer,
+                                        )
+                                    }
+                                    MessageType.VIEW_ONCE -> {
+                                        ViewOnceCard(
+                                            message = msg,
+                                            isReceiptExpanded = tappedReceiptMsgId == msg.id,
+                                            isJumpHighlighted = isJumpHighlighted,
+                                            onTapCard = {
+                                                if (selectedMessageIds.isNotEmpty()) {
+                                                    toggleSelect()
+                                                } else if (!msg.isMine && msg.viewOnceStatus == ViewOnceStatus.UNOPENED) {
+                                                    viewingViewOnceMessage = msg
+                                                } else {
+                                                    onTapBubbleAction()
+                                                }
+                                            },
+                                            onLongPress = toggleSelect,
+                                        )
+                                    }
+                                    MessageType.BURNED_TRACE -> {
+                                        BurnedTraceBubble(
+                                            message = msg,
+                                            fontScale = state.messageFontScale,
+                                            inSelectionMode = selectedMessageIds.isNotEmpty(),
+                                            onToggleSelect = toggleSelect,
+                                        )
+                                    }
+                                    MessageType.REGULAR -> {
+                                        StandardMessageBubble(
+                                            message = msg,
+                                            fontScale = state.messageFontScale,
+                                            isGroup = isGroup,
+                                            isReceiptExpanded = tappedReceiptMsgId == msg.id,
+                                            highlightQuery = if (isSearchMatch) inChatSearchQuery.trim() else "",
+                                            isJumpHighlighted = isJumpHighlighted,
+                                            onTapBubble = onTapBubbleAction,
+                                            onLongPress = toggleSelect,
+                                            onToggleEmojiReaction = { emoji -> state.reactToMessage(activeChatId, msg.id, emoji) },
+                                            onOpenPhoto = { path ->
+                                                if (selectedMessageIds.isNotEmpty()) toggleSelect() else fullScreenPhotoPath = path
+                                            },
+                                            onOpenVideo = { path ->
+                                                if (selectedMessageIds.isNotEmpty()) toggleSelect() else fullScreenVideoPath = path
+                                            },
+                                            onOpenFile = { path, mime ->
+                                                if (selectedMessageIds.isNotEmpty()) toggleSelect() else openLocalFile(path, mime)
+                                            },
+                                            onJumpToReply = { replyId ->
+                                                if (selectedMessageIds.isNotEmpty()) toggleSelect() else jumpToMessage(replyId)
+                                            },
+                                            onVoicePlayStarted = { startedMsg ->
+                                                state.markVoiceNoteListened(activeChatId, startedMsg)
+                                            },
+                                            onFavoriteSticker = { stickerMsg ->
+                                                coroutineScope.launch {
+                                                    state.favoriteStickerFromMessage(stickerMsg)
+                                                        .onSuccess { actionNotice = "added to my stickers" }
+                                                        .onFailure { attachmentError = it.localizedMessage ?: "failed to save sticker" }
+                                                }
+                                            },
+                                            voicePlayer = state.voicePlayer,
+                                        )
+                                    }
                                 }
-                                MessageType.VIEW_ONCE -> {
-                                    ViewOnceCard(
-                                        message = msg,
-                                        onOpen = { state.revealViewOnce(activeChatId, msg.id) },
-                                        onLongPress = { actionModalMessage = msg },
-                                        onOpenPhoto = { fullScreenPhotoPath = it },
-                                        onOpenFile = { path, mime -> openLocalFile(path, mime) },
-                                    )
-                                }
-                                MessageType.BURNED_TRACE -> {
-                                    BurnedTraceBubble(message = msg, fontScale = state.messageFontScale)
-                                }
-                                MessageType.REGULAR -> {
-                                    StandardMessageBubble(
-                                        message = msg,
-                                        fontScale = state.messageFontScale,
-                                        isGroup = isGroup,
-                                        isReceiptExpanded = tappedReceiptMsgId == msg.id,
-                                        highlightQuery = if (isSearchMatch) inChatSearchQuery.trim() else "",
-                                        onTapBubble = {
-                                            tappedReceiptMsgId = if (tappedReceiptMsgId == msg.id) null else msg.id
-                                        },
-                                        onLongPress = { actionModalMessage = msg },
-                                        onToggleEmojiReaction = { emoji -> state.reactToMessage(activeChatId, msg.id, emoji) },
-                                        onOpenPhoto = { fullScreenPhotoPath = it },
-                                        onOpenFile = { path, mime -> openLocalFile(path, mime) },
-                                        onJumpToReply = { replyId ->
-                                            val idx = messages.indexOfFirst { it.id == replyId }
-                                            if (idx >= 0) coroutineScope.launch { listState.animateScrollToItem(idx) }
-                                        },
-                                        voicePlayer = state.voicePlayer,
-                                    )
-                                }
+                            }
+
+                            // When exactly 1 message is selected, render reaction line and actions next to the message.
+                            // When 2 or more messages are selected, this floating bar disappears completely.
+                            if (selectedMessages.size == 1 &&
+                                selectedMessages.first().id == msg.id &&
+                                !msg.isDeleted &&
+                                msg.type != MessageType.BURNED_TRACE
+                            ) {
+                                val canSaveMedia = msg.type != MessageType.VIEW_ONCE &&
+                                    msg.attachmentType != null &&
+                                    !msg.attachmentLocalPath.isNullOrBlank() &&
+                                    File(msg.attachmentLocalPath).exists()
+                                val canFavSticker = msg.type != MessageType.VIEW_ONCE &&
+                                    msg.attachmentType == AttachmentType.STICKER &&
+                                    !msg.attachmentLocalPath.isNullOrBlank() &&
+                                    File(msg.attachmentLocalPath).exists()
+                                Spacer(modifier = Modifier.height(6.dp))
+                                SelectedMessageToolbar(
+                                    message = msg,
+                                    currentUsername = state.currentUsername,
+                                    customReactionEmojis = state.customReactionEmojis,
+                                    onReact = { emoji ->
+                                        state.reactToMessage(activeChatId, msg.id, emoji)
+                                        selectedMessageIds = emptySet()
+                                    },
+                                    onOpenEditReactions = { showEditReactionsDialog = true },
+                                    onReply = {
+                                        replyingToMessage = msg
+                                        selectedMessageIds = emptySet()
+                                    },
+                                    onEdit = if (msg.isMine && msg.type == MessageType.REGULAR && msg.attachmentType == null) {
+                                        {
+                                            editingMessage = msg
+                                            draft = msg.text
+                                            replyingToMessage = null
+                                            selectedMessageIds = emptySet()
+                                        }
+                                    } else null,
+                                    onPin = {
+                                        state.togglePinMessage(activeChatId, msg.id)
+                                        selectedMessageIds = emptySet()
+                                    },
+                                    onInfo = {
+                                        infoModalMessage = msg
+                                        selectedMessageIds = emptySet()
+                                    },
+                                    onStar = {
+                                        state.toggleStarMessage(activeChatId, msg.id)
+                                        selectedMessageIds = emptySet()
+                                    },
+                                    onFavoriteSticker = if (canFavSticker) {
+                                        {
+                                            coroutineScope.launch {
+                                                state.favoriteStickerFromMessage(msg)
+                                                    .onSuccess { actionNotice = "added to my stickers" }
+                                                    .onFailure { attachmentError = it.localizedMessage ?: "failed to save sticker" }
+                                            }
+                                            selectedMessageIds = emptySet()
+                                        }
+                                    } else null,
+                                    onSaveMedia = if (canSaveMedia) {
+                                        {
+                                            msg.attachmentLocalPath?.let { path ->
+                                                saveMediaFromChat(
+                                                    localPath = path,
+                                                    attachmentType = msg.attachmentType,
+                                                    mimeType = msg.attachmentMimeType,
+                                                    fileName = msg.attachmentName,
+                                                )
+                                            }
+                                            selectedMessageIds = emptySet()
+                                        }
+                                    } else null,
+                                    onDelete = {
+                                        deleteTargetMessages = listOf(msg)
+                                        selectedMessageIds = emptySet()
+                                    },
+                                )
                             }
                         }
                     }
@@ -811,7 +1211,7 @@ fun ChatScreen(
             if (editingMessage != null) {
                 val target = editingMessage!!
                 InputModeBanner(
-                    label = "✏ editing message",
+                    label = "editing message",
                     preview = target.text,
                     onCancel = {
                         editingMessage = null
@@ -822,13 +1222,13 @@ fun ChatScreen(
                 val target = replyingToMessage!!
                 val who = if (target.isMine) "you" else target.senderUsername
                 InputModeBanner(
-                    label = "↩ replying to @$who",
+                    label = "replying to @$who",
                     preview = target.text.ifBlank { target.attachmentName ?: "attachment" },
                     onCancel = { replyingToMessage = null },
                 )
             }
 
-            // Pending Attachment Preview Strip
+            // Pending Attachment Preview Strip with WhatsApp-style View-Once Toggle
             pendingAttachment?.let { att ->
                 Box(
                     modifier = Modifier
@@ -852,6 +1252,18 @@ fun ChatScreen(
                                     .clip(SteppedCornerShape(3.dp))
                                     .border(1.dp, LanternAmber, SteppedCornerShape(3.dp)),
                             )
+                        } else if (att.type == AttachmentType.VIDEO) {
+                            SteppedBox(
+                                modifier = Modifier.size(44.dp),
+                                backgroundColor = MothBgDark,
+                                borderColor = LanternAmber,
+                                cutSize = 3.dp,
+                                borderWidth = 1.dp,
+                            ) {
+                                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    PixelVideoIcon(tint = LanternAmber, modifier = Modifier.size(20.dp))
+                                }
+                            }
                         } else {
                             SteppedBox(
                                 modifier = Modifier.size(44.dp),
@@ -883,16 +1295,39 @@ fun ChatScreen(
                                 overflow = TextOverflow.Ellipsis,
                             )
                             Text(
-                                text = formatFileSize(att.sizeBytes),
+                                text = if (pendingViewOnce) "${formatFileSize(att.sizeBytes)} • view once" else formatFileSize(att.sizeBytes),
                                 fontFamily = PixelifySans,
                                 fontSize = 11.sp,
-                                color = MutedText,
+                                color = if (pendingViewOnce) LanternAmber else MutedText,
                             )
+                        }
+
+                        // WhatsApp-style View-Once toggle on selected attachment
+                        SteppedBox(
+                            modifier = Modifier
+                                .size(34.dp)
+                                .clickable { pendingViewOnce = !pendingViewOnce }
+                                .testTag("pending_view_once_toggle"),
+                            backgroundColor = if (pendingViewOnce) MyBubbleFill else MothBgDark,
+                            borderColor = if (pendingViewOnce) LanternAmber else TheirBubbleBorder,
+                            cutSize = 3.dp,
+                            borderWidth = 1.dp,
+                        ) {
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                PixelViewOnceIcon(
+                                    tint = if (pendingViewOnce) MyBubbleText else MutedText,
+                                    active = pendingViewOnce,
+                                    modifier = Modifier.size(18.dp),
+                                )
+                            }
                         }
 
                         SteppedBox(
                             modifier = Modifier
-                                .clickable { pendingAttachment = null }
+                                .clickable {
+                                    pendingAttachment = null
+                                    pendingViewOnce = false
+                                }
                                 .testTag("clear_attachment_button"),
                             backgroundColor = MothBgDark,
                             borderColor = WaxSealRed,
@@ -982,9 +1417,8 @@ fun ChatScreen(
                                         state.sendSticker(
                                             chatId = activeChatId,
                                             sticker = sticker,
-                                            asViewOnce = selectedSendType == MessageType.VIEW_ONCE,
+                                            asViewOnce = false,
                                         )
-                                        selectedSendType = MessageType.REGULAR
                                         showStickerTray = false
                                     },
                                     onDelete = { state.deleteSticker(sticker.id) },
@@ -1001,7 +1435,7 @@ fun ChatScreen(
                 }
             }
 
-            // + (More) Menu: Camera, Photo, File, View Once
+            // + (More) Menu: Camera, Photo/Video Media, File
             AnimatedVisibility(visible = showAttachMenu) {
                 Row(
                     modifier = Modifier
@@ -1009,7 +1443,7 @@ fun ChatScreen(
                         .background(MothHeaderBg)
                         .border(1.dp, MothDivider)
                         .padding(horizontal = 10.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     SteppedButton(
                         text = "cam",
@@ -1033,10 +1467,10 @@ fun ChatScreen(
                         leadingIcon = { PixelCameraIcon(tint = TheirBubbleText) },
                     )
                     SteppedButton(
-                        text = "photo",
+                        text = "media",
                         onClick = {
                             photoPickerLauncher.launch(
-                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
                             )
                         },
                         modifier = Modifier.weight(1f).testTag("pick_photo_button"),
@@ -1056,56 +1490,6 @@ fun ChatScreen(
                         cutSize = 3.dp,
                         leadingIcon = { PixelFileIcon(tint = TheirBubbleText) },
                     )
-                    SteppedButton(
-                        text = "once",
-                        onClick = {
-                            selectedSendType = if (selectedSendType == MessageType.VIEW_ONCE) {
-                                MessageType.REGULAR
-                            } else {
-                                MessageType.VIEW_ONCE
-                            }
-                            showAttachMenu = false
-                        },
-                        modifier = Modifier.weight(1f).testTag("toggle_view_once_button"),
-                        backgroundColor = if (selectedSendType == MessageType.VIEW_ONCE) MyBubbleFill else TheirBubbleFill,
-                        borderColor = if (selectedSendType == MessageType.VIEW_ONCE) MyBubbleBorder else TheirBubbleBorder,
-                        textColor = if (selectedSendType == MessageType.VIEW_ONCE) MyBubbleText else TheirBubbleText,
-                        cutSize = 3.dp,
-                        leadingIcon = {
-                            PixelSealIcon(
-                                tint = if (selectedSendType == MessageType.VIEW_ONCE) MyBubbleText else TheirBubbleText
-                            )
-                        },
-                    )
-                }
-            }
-
-            if (selectedSendType == MessageType.VIEW_ONCE) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(TheirBubbleFill)
-                        .padding(horizontal = 16.dp, vertical = 4.dp),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "📜 sending as view-once sealed card",
-                            fontFamily = PixelifySans,
-                            fontSize = 11.sp,
-                            color = LanternAmber,
-                        )
-                        Text(
-                            text = "cancel",
-                            fontFamily = PixelifySans,
-                            fontSize = 11.sp,
-                            color = MutedText,
-                            modifier = Modifier.clickable { selectedSendType = MessageType.REGULAR },
-                        )
-                    }
                 }
             }
 
@@ -1199,7 +1583,7 @@ fun ChatScreen(
                                 }
                                 .testTag("attach_button"),
                             backgroundColor = MothBgDark,
-                            borderColor = if (showAttachMenu || pendingAttachment != null || selectedSendType == MessageType.VIEW_ONCE) LanternAmber else TheirBubbleBorder,
+                            borderColor = if (showAttachMenu || pendingAttachment != null || pendingViewOnce) LanternAmber else TheirBubbleBorder,
                             cutSize = 4.dp,
                             borderWidth = 2.dp,
                         ) {
@@ -1209,7 +1593,7 @@ fun ChatScreen(
                                     fontFamily = PixelifySans,
                                     fontSize = 18.sp,
                                     fontWeight = FontWeight.Bold,
-                                    color = if (showAttachMenu || pendingAttachment != null || selectedSendType == MessageType.VIEW_ONCE) LanternAmber else TheirBubbleText,
+                                    color = if (showAttachMenu || pendingAttachment != null || pendingViewOnce) LanternAmber else TheirBubbleText,
                                 )
                             }
                         }
@@ -1319,46 +1703,37 @@ fun ChatScreen(
             }
         }
 
-        // Long-press Emoji Reaction & Message Action Modal
-        actionModalMessage?.let { msg ->
-            MessageReactionAndActionModal(
-                message = msg,
-                currentUsername = state.currentUsername,
-                onDismiss = { actionModalMessage = null },
-                onReact = { emoji ->
-                    state.reactToMessage(activeChatId, msg.id, emoji)
-                    actionModalMessage = null
-                },
-                onReply = {
-                    replyingToMessage = msg
-                    actionModalMessage = null
-                },
-                onForward = {
-                    forwardModalMessage = msg
-                    actionModalMessage = null
-                },
-                onEdit = {
-                    editingMessage = msg
-                    draft = msg.text
-                    replyingToMessage = null
-                    actionModalMessage = null
-                },
-                onTogglePin = {
-                    state.togglePinMessage(activeChatId, msg.id)
-                    actionModalMessage = null
-                },
-                onInfo = {
-                    infoModalMessage = msg
-                    actionModalMessage = null
-                },
+        // Edit Quick Reactions Dialog
+        if (showEditReactionsDialog) {
+            EditReactionsDialog(
+                currentEmojis = state.customReactionEmojis,
+                onSave = { updated -> state.updateCustomReactionEmojis(updated) },
+                onReset = { state.resetCustomReactionEmojis() },
+                onDismiss = { showEditReactionsDialog = false },
+            )
+        }
+
+        // Delete Choice Dialog ("Delete for me / Delete for everyone")
+        if (deleteTargetMessages.isNotEmpty()) {
+            val targets = deleteTargetMessages
+            DeleteChoiceDialog(
+                count = targets.size,
+                canDeleteForEveryone = targets.any { it.isMine && !it.isDeleted },
                 onDeleteForMe = {
-                    state.deleteMessageForMe(activeChatId, msg.id)
-                    actionModalMessage = null
+                    targets.forEach { m -> state.deleteMessageForMe(activeChatId, m.id) }
+                    deleteTargetMessages = emptyList()
                 },
                 onDeleteForEveryone = {
-                    state.deleteMessageForEveryone(activeChatId, msg.id)
-                    actionModalMessage = null
+                    targets.forEach { m ->
+                        if (m.isMine && !m.isDeleted) {
+                            state.deleteMessageForEveryone(activeChatId, m.id)
+                        } else {
+                            state.deleteMessageForMe(activeChatId, m.id)
+                        }
+                    }
+                    deleteTargetMessages = emptyList()
                 },
+                onDismiss = { deleteTargetMessages = emptyList() },
             )
         }
 
@@ -1368,14 +1743,16 @@ fun ChatScreen(
         }
 
         // Forward Target Picker Modal
-        forwardModalMessage?.let { msg ->
+        if (forwardModalMessages.isNotEmpty()) {
+            val toForward = forwardModalMessages
             ForwardTargetModal(
+                count = toForward.size,
                 conversations = state.conversations,
                 onSelect = { target ->
-                    state.forwardMessage(msg, target)
-                    forwardModalMessage = null
+                    toForward.forEach { msg -> state.forwardMessage(msg, target) }
+                    forwardModalMessages = emptyList()
                 },
-                onDismiss = { forwardModalMessage = null },
+                onDismiss = { forwardModalMessages = emptyList() },
             )
         }
 
@@ -1385,6 +1762,22 @@ fun ChatScreen(
                 state = state,
                 conversation = activeConv,
                 onDismiss = { showGroupInfoModal = false },
+            )
+        }
+
+        // Extended Contact Profile Overlay (with Shared Media/Files/Voice)
+        if (showContactProfileOverlay && !isGroup) {
+            ContactProfileOverlay(
+                state = state,
+                contactUsername = activeConv?.name ?: chatTitle,
+                conversation = activeConv,
+                messages = messages,
+                onDismiss = { showContactProfileOverlay = false },
+                onCallVoice = { launchCallFromChat() },
+                onOpenSearch = { showInChatSearch = true },
+                onOpenPhoto = { fullScreenPhotoPath = it },
+                onOpenVideo = { fullScreenVideoPath = it },
+                onOpenFile = { path, mime -> openLocalFile(path, mime) },
             )
         }
 
@@ -1402,7 +1795,19 @@ fun ChatScreen(
             )
         }
 
-        // Fullscreen Photo Viewer Overlay
+        // View-Once Protected Media Overlay (enforces FLAG_SECURE & burns on close)
+        viewingViewOnceMessage?.let { voMsg ->
+            ViewOnceMediaOverlay(
+                state = state,
+                message = voMsg,
+                onCloseAndBurn = {
+                    state.markViewOnceOpenedAndBurn(activeChatId, voMsg.id)
+                    viewingViewOnceMessage = null
+                },
+            )
+        }
+
+        // Fullscreen Photo Viewer Overlay (with Save to Gallery)
         fullScreenPhotoPath?.let { photoPath ->
             Box(
                 modifier = Modifier
@@ -1419,14 +1824,140 @@ fun ChatScreen(
                     contentScale = ContentScale.Fit,
                     modifier = Modifier.fillMaxSize().align(Alignment.Center),
                 )
-                SteppedButton(
-                    text = "✕ close",
-                    onClick = { fullScreenPhotoPath = null },
-                    modifier = Modifier.align(Alignment.TopEnd).testTag("close_photo_viewer_button"),
-                    backgroundColor = MothHeaderBg,
-                    borderColor = LanternAmber,
-                    textColor = LanternAmber,
-                    cutSize = 3.dp,
+                Row(
+                    modifier = Modifier.align(Alignment.TopEnd),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    SteppedButton(
+                        text = "save",
+                        onClick = {
+                            saveMediaFromChat(
+                                localPath = photoPath,
+                                attachmentType = AttachmentType.PHOTO,
+                                mimeType = "image/jpeg",
+                                fileName = File(photoPath).name,
+                            )
+                        },
+                        modifier = Modifier.testTag("save_photo_button"),
+                        backgroundColor = MothHeaderBg,
+                        borderColor = SecureGreen,
+                        textColor = SecureGreen,
+                        cutSize = 3.dp,
+                    )
+                    SteppedButton(
+                        text = "close",
+                        onClick = { fullScreenPhotoPath = null },
+                        modifier = Modifier.testTag("close_photo_viewer_button"),
+                        backgroundColor = MothHeaderBg,
+                        borderColor = LanternAmber,
+                        textColor = LanternAmber,
+                        cutSize = 3.dp,
+                    )
+                }
+            }
+        }
+
+        // Fullscreen Video Player Overlay (with Save to Movies)
+        fullScreenVideoPath?.let { videoPath ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(MothBgDark.copy(alpha = 0.96f))
+                    .statusBarsPadding()
+                    .navigationBarsPadding()
+                    .padding(16.dp),
+            ) {
+                AndroidView(
+                    factory = { ctx ->
+                        VideoView(ctx).apply {
+                            val controller = MediaController(ctx)
+                            controller.setAnchorView(this)
+                            setMediaController(controller)
+                            setVideoURI(Uri.fromFile(File(videoPath)))
+                            setOnPreparedListener { start() }
+                        }
+                    },
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .heightIn(min = 240.dp, max = 520.dp)
+                        .align(Alignment.Center),
+                )
+                Row(
+                    modifier = Modifier.align(Alignment.TopEnd),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    SteppedButton(
+                        text = "save",
+                        onClick = {
+                            saveMediaFromChat(
+                                localPath = videoPath,
+                                attachmentType = AttachmentType.VIDEO,
+                                mimeType = "video/mp4",
+                                fileName = File(videoPath).name,
+                            )
+                        },
+                        modifier = Modifier.testTag("save_video_button"),
+                        backgroundColor = MothHeaderBg,
+                        borderColor = SecureGreen,
+                        textColor = SecureGreen,
+                        cutSize = 3.dp,
+                    )
+                    SteppedButton(
+                        text = "close",
+                        onClick = { fullScreenVideoPath = null },
+                        modifier = Modifier.testTag("close_video_viewer_button"),
+                        backgroundColor = MothHeaderBg,
+                        borderColor = LanternAmber,
+                        textColor = LanternAmber,
+                        cutSize = 3.dp,
+                    )
+                }
+            }
+        }
+
+        // Photo Sticker Interactive Cropper
+        pendingStickerCropUri?.let { cropUri ->
+            ImageCropDialog(
+                imageUri = cropUri,
+                title = "crop sticker",
+                outputSizePx = 320,
+                showLabelInput = true,
+                initialLabel = pendingStickerCropLabel,
+                onConfirm = { croppedBitmap, customLabel ->
+                    pendingStickerCropUri = null
+                    isPreparingAttachment = true
+                    attachmentError = null
+                    coroutineScope.launch {
+                        val res = state.createPhotoStickerBitmap(croppedBitmap, customLabel)
+                        res.onSuccess { actionNotice = "sticker saved to my stickers" }
+                            .onFailure { err -> attachmentError = err.localizedMessage ?: "failed to create sticker" }
+                        if (!croppedBitmap.isRecycled) croppedBitmap.recycle()
+                        isPreparingAttachment = false
+                    }
+                },
+                onDismiss = { pendingStickerCropUri = null },
+            )
+        }
+
+        // Brief floating notice toast for save / favourite sticker confirmations
+        actionNotice?.let { noticeText ->
+            SteppedBox(
+                modifier = Modifier
+                    .align(Alignment.TopCenter)
+                    .statusBarsPadding()
+                    .padding(top = 64.dp, start = 20.dp, end = 20.dp)
+                    .testTag("chat_action_notice"),
+                backgroundColor = MothHeaderBg,
+                borderColor = SecureGreen,
+                cutSize = 3.dp,
+                borderWidth = 1.dp,
+            ) {
+                Text(
+                    text = noticeText,
+                    fontFamily = PixelifySans,
+                    fontSize = 12.sp,
+                    color = SecureGreen,
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
                 )
             }
         }
@@ -1690,12 +2221,16 @@ private fun StandardMessageBubble(
     isGroup: Boolean,
     isReceiptExpanded: Boolean,
     highlightQuery: String,
+    isJumpHighlighted: Boolean = false,
     onTapBubble: () -> Unit,
     onLongPress: () -> Unit,
     onToggleEmojiReaction: (String) -> Unit,
     onOpenPhoto: (String) -> Unit,
+    onOpenVideo: (String) -> Unit,
     onOpenFile: (String, String?) -> Unit,
     onJumpToReply: (String) -> Unit,
+    onVoicePlayStarted: (MothMessage) -> Unit = {},
+    onFavoriteSticker: (MothMessage) -> Unit = {},
     voicePlayer: VoiceNotePlayer,
 ) {
     Column(
@@ -1704,23 +2239,42 @@ private fun StandardMessageBubble(
     ) {
         if (!message.isDeleted && message.attachmentType == AttachmentType.STICKER && message.text.isBlank()) {
             val path = message.attachmentLocalPath
-            if (!path.isNullOrBlank() && File(path).exists()) {
-                AsyncImage(
-                    model = File(path),
-                    contentDescription = message.attachmentName ?: "Sticker",
-                    contentScale = ContentScale.Fit,
-                    filterQuality = FilterQuality.None,
-                    modifier = Modifier
-                        .size(124.dp)
-                        .combinedClickable(onClick = onTapBubble, onLongClick = onLongPress)
-                        .testTag("sticker_bubble_${message.id}"),
-                )
-            } else {
-                Text("[sticker]", fontFamily = PixelifySans, fontSize = 12.sp, color = MutedText)
+            Box(modifier = Modifier.combinedClickable(onClick = onTapBubble, onLongClick = onLongPress)) {
+                if (!path.isNullOrBlank() && File(path).exists()) {
+                    AsyncImage(
+                        model = File(path),
+                        contentDescription = message.attachmentName ?: "Sticker",
+                        contentScale = ContentScale.Fit,
+                        filterQuality = FilterQuality.None,
+                        modifier = Modifier
+                            .size(124.dp)
+                            .testTag("sticker_bubble_${message.id}"),
+                    )
+                } else {
+                    Text("[sticker]", fontFamily = PixelifySans, fontSize = 12.sp, color = MutedText)
+                }
+                if (message.isStarred || message.isPinned) {
+                    Row(
+                        modifier = Modifier
+                            .align(Alignment.BottomEnd)
+                            .background(MothHeaderBg.copy(alpha = 0.85f))
+                            .padding(3.dp),
+                        horizontalArrangement = Arrangement.spacedBy(3.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        if (message.isPinned) {
+                            PixelPinIcon(tint = LanternAmber, modifier = Modifier.size(11.dp))
+                        }
+                        if (message.isStarred) {
+                            PixelStarIcon(tint = LanternAmber, filled = true, modifier = Modifier.size(11.dp))
+                        }
+                    }
+                }
             }
         } else {
             val bg = if (message.isDeleted) MothHeaderBg else if (message.isMine) MyBubbleFill else TheirBubbleFill
             val border = when {
+                isJumpHighlighted -> LanternAmber
                 highlightQuery.isNotBlank() -> LanternAmber
                 message.isDeleted -> MothDivider
                 message.isMine -> MyBubbleBorder
@@ -1736,9 +2290,9 @@ private fun StandardMessageBubble(
                             if (message.isDeleted) return@combinedClickable
                             when (message.attachmentType) {
                                 AttachmentType.PHOTO -> if (!message.attachmentLocalPath.isNullOrBlank()) onOpenPhoto(message.attachmentLocalPath) else onTapBubble()
+                                AttachmentType.VIDEO -> if (!message.attachmentLocalPath.isNullOrBlank()) onOpenVideo(message.attachmentLocalPath) else onTapBubble()
                                 AttachmentType.FILE -> if (!message.attachmentLocalPath.isNullOrBlank()) onOpenFile(message.attachmentLocalPath, message.attachmentMimeType) else onTapBubble()
-                                AttachmentType.VOICE -> if (!message.attachmentLocalPath.isNullOrBlank()) voicePlayer.togglePlay(message.id, message.attachmentLocalPath) else onTapBubble()
-                                else -> onTapBubble()
+                                AttachmentType.VOICE, AttachmentType.STICKER, null -> onTapBubble()
                             }
                         },
                         onLongClick = onLongPress,
@@ -1756,10 +2310,13 @@ private fun StandardMessageBubble(
                     textColor = textColor,
                     borderColor = border,
                     highlightQuery = highlightQuery,
+                    onTapBubble = onTapBubble,
                     onOpenPhoto = onOpenPhoto,
+                    onOpenVideo = onOpenVideo,
                     onOpenFile = onOpenFile,
                     onLongPress = onLongPress,
                     onJumpToReply = onJumpToReply,
+                    onVoicePlayStarted = onVoicePlayStarted,
                     voicePlayer = voicePlayer,
                 )
             }
@@ -1768,7 +2325,29 @@ private fun StandardMessageBubble(
         ReactionsChipRow(message = message, onToggleEmojiReaction = onToggleEmojiReaction)
 
         if (isReceiptExpanded) {
-            InlineReceiptLine(message = message)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+            ) {
+                InlineReceiptLine(message = message)
+                if (!message.isDeleted &&
+                    message.attachmentType == AttachmentType.STICKER &&
+                    !message.attachmentLocalPath.isNullOrBlank() &&
+                    File(message.attachmentLocalPath).exists()
+                ) {
+                    Text(
+                        text = "+ save sticker",
+                        fontFamily = PixelifySans,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = LanternAmber,
+                        modifier = Modifier
+                            .padding(top = 3.dp)
+                            .clickable { onFavoriteSticker(message) }
+                            .testTag("inline_fav_sticker_${message.id}"),
+                    )
+                }
+            }
         }
     }
 }
@@ -1782,11 +2361,15 @@ private fun DisappearingMessageBubble(
     isGroup: Boolean,
     isReceiptExpanded: Boolean,
     highlightQuery: String,
+    isJumpHighlighted: Boolean = false,
     onTapBubble: () -> Unit,
     onLongPress: () -> Unit,
     onToggleEmojiReaction: (String) -> Unit,
     onOpenPhoto: (String) -> Unit,
+    onOpenVideo: (String) -> Unit,
     onOpenFile: (String, String?) -> Unit,
+    onJumpToReply: (String) -> Unit = {},
+    onVoicePlayStarted: (MothMessage) -> Unit = {},
     voicePlayer: VoiceNotePlayer,
 ) {
     Column(
@@ -1794,7 +2377,7 @@ private fun DisappearingMessageBubble(
         horizontalAlignment = if (message.isMine) Alignment.End else Alignment.Start,
     ) {
         val bg = if (message.isMine) MyBubbleFill else TheirBubbleFill
-        val border = if (highlightQuery.isNotBlank()) LanternAmber else if (message.isMine) MyBubbleBorder else TheirBubbleBorder
+        val border = if (isJumpHighlighted || highlightQuery.isNotBlank()) LanternAmber else if (message.isMine) MyBubbleBorder else TheirBubbleBorder
         val textColor = if (message.isMine) MyBubbleText else TheirBubbleText
 
         SteppedBox(
@@ -1804,9 +2387,9 @@ private fun DisappearingMessageBubble(
                     onClick = {
                         when (message.attachmentType) {
                             AttachmentType.PHOTO -> if (!message.attachmentLocalPath.isNullOrBlank()) onOpenPhoto(message.attachmentLocalPath) else onTapBubble()
+                            AttachmentType.VIDEO -> if (!message.attachmentLocalPath.isNullOrBlank()) onOpenVideo(message.attachmentLocalPath) else onTapBubble()
                             AttachmentType.FILE -> if (!message.attachmentLocalPath.isNullOrBlank()) onOpenFile(message.attachmentLocalPath, message.attachmentMimeType) else onTapBubble()
-                            AttachmentType.VOICE -> if (!message.attachmentLocalPath.isNullOrBlank()) voicePlayer.togglePlay(message.id, message.attachmentLocalPath) else onTapBubble()
-                            else -> onTapBubble()
+                            AttachmentType.VOICE, AttachmentType.STICKER, null -> onTapBubble()
                         }
                     },
                     onLongClick = onLongPress,
@@ -1824,10 +2407,13 @@ private fun DisappearingMessageBubble(
                 textColor = textColor,
                 borderColor = border,
                 highlightQuery = highlightQuery,
+                onTapBubble = onTapBubble,
                 onOpenPhoto = onOpenPhoto,
+                onOpenVideo = onOpenVideo,
                 onOpenFile = onOpenFile,
                 onLongPress = onLongPress,
-                onJumpToReply = {},
+                onJumpToReply = onJumpToReply,
+                onVoicePlayStarted = onVoicePlayStarted,
                 voicePlayer = voicePlayer,
             )
         }
@@ -1858,8 +2444,24 @@ private fun DisappearingMessageBubble(
 
 @Composable
 private fun InlineReceiptLine(message: MothMessage) {
-    val label = if (!message.isMine) {
-        "received • ${message.time}"
+    fun fmtTs(ms: Long): String {
+        return if (ms > 0L) {
+            SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(ms)).lowercase()
+        } else {
+            message.time
+        }
+    }
+
+    val isVoiceListened = message.attachmentType == AttachmentType.VOICE && message.listenedAt > 0L
+    val label = if (isVoiceListened) {
+        "listened • ${fmtTs(message.listenedAt)}"
+    } else if (!message.isMine) {
+        if (message.status == MessageStatus.READ && message.readAt > 0L) {
+            "seen • ${fmtTs(message.readAt)}"
+        } else {
+            val recTs = message.deliveredAt.takeIf { it > 0L } ?: message.sentAt
+            "received • ${fmtTs(recTs)}"
+        }
     } else {
         val statusWord = when (message.status) {
             MessageStatus.SENDING -> "sending..."
@@ -1872,24 +2474,27 @@ private fun InlineReceiptLine(message: MothMessage) {
             MessageStatus.DELIVERED -> message.deliveredAt.takeIf { it > 0L } ?: message.sentAt
             else -> message.sentAt
         }
-        val tsLabel = if (tsMs > 0L) {
-            SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(tsMs)).lowercase()
-        } else message.time
-        if (message.status == MessageStatus.SENDING) "sending..." else "$statusWord • $tsLabel"
+        if (message.status == MessageStatus.SENDING) "sending..." else "$statusWord • ${fmtTs(tsMs)}"
     }
     Text(
         text = label,
         fontFamily = PixelifySans,
         fontSize = 10.sp,
-        color = if (message.status == MessageStatus.READ) SecureGreen else MutedText,
+        color = if (isVoiceListened || message.status == MessageStatus.READ) SecureGreen else MutedText,
         modifier = Modifier
             .padding(top = 3.dp, start = 4.dp, end = 4.dp)
             .testTag("inline_receipt_${message.id}"),
     )
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun BurnedTraceBubble(message: MothMessage, fontScale: Float) {
+private fun BurnedTraceBubble(
+    message: MothMessage,
+    fontScale: Float,
+    inSelectionMode: Boolean = false,
+    onToggleSelect: () -> Unit = {},
+) {
     var isRevealed by remember(message.id) { mutableStateOf(false) }
     val canPeek = message.isMine && message.text.isNotBlank()
 
@@ -1903,7 +2508,10 @@ private fun BurnedTraceBubble(message: MothMessage, fontScale: Float) {
                     .widthIn(max = 280.dp)
                     .defaultMinSize(minHeight = 48.dp)
                     .alpha(0.45f)
-                    .clickable { isRevealed = false }
+                    .combinedClickable(
+                        onClick = { if (inSelectionMode) onToggleSelect() else isRevealed = false },
+                        onLongClick = onToggleSelect,
+                    )
                     .testTag("burned_trace_revealed_${message.id}"),
                 backgroundColor = MyBubbleFill,
                 borderColor = MyBubbleBorder,
@@ -1921,25 +2529,29 @@ private fun BurnedTraceBubble(message: MothMessage, fontScale: Float) {
                         lineHeight = (20f * fontScale).sp,
                         color = MyBubbleText,
                     )
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    ) {
-                        Text(text = "✦", fontSize = 10.sp, color = WaxSealRed)
-                        Text(
-                            text = "ash memory • tap to hide",
-                            fontFamily = PixelifySans,
-                            fontSize = 10.sp,
-                            color = MyBubbleText.copy(alpha = 0.75f),
-                        )
-                    }
+                    Text(
+                        text = "ash memory • tap to hide",
+                        fontFamily = PixelifySans,
+                        fontSize = 10.sp,
+                        color = MyBubbleText.copy(alpha = 0.75f),
+                    )
                 }
             }
         } else {
             SteppedBox(
                 modifier = Modifier
                     .widthIn(max = 260.dp)
-                    .then(if (canPeek) Modifier.defaultMinSize(minHeight = 48.dp).clickable { isRevealed = true } else Modifier)
+                    .defaultMinSize(minHeight = 48.dp)
+                    .combinedClickable(
+                        onClick = {
+                            if (inSelectionMode) {
+                                onToggleSelect()
+                            } else if (canPeek) {
+                                isRevealed = true
+                            }
+                        },
+                        onLongClick = onToggleSelect,
+                    )
                     .testTag("burned_trace_${message.id}"),
                 backgroundColor = MothHeaderBg,
                 borderColor = MothDivider,
@@ -1951,7 +2563,7 @@ private fun BurnedTraceBubble(message: MothMessage, fontScale: Float) {
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    Text(text = "✦", fontSize = 12.sp, color = WaxSealRed)
+                    Box(modifier = Modifier.size(6.dp).background(WaxSealRed))
                     Column {
                         Text(text = "a burning message turned to ash", fontFamily = PixelifySans, fontSize = 12.sp, color = MutedText)
                         if (canPeek) {
@@ -1968,78 +2580,86 @@ private fun BurnedTraceBubble(message: MothMessage, fontScale: Float) {
 @Composable
 private fun ViewOnceCard(
     message: MothMessage,
-    onOpen: () -> Unit,
+    isReceiptExpanded: Boolean,
+    isJumpHighlighted: Boolean = false,
+    onTapCard: () -> Unit,
     onLongPress: () -> Unit,
-    onOpenPhoto: (String) -> Unit,
-    onOpenFile: (String, String?) -> Unit,
 ) {
+    val isBurned = message.viewOnceStatus != ViewOnceStatus.UNOPENED
+    val mediaWord = when (message.attachmentType) {
+        AttachmentType.VIDEO -> "video"
+        AttachmentType.PHOTO -> "photo"
+        AttachmentType.VOICE -> "voice note"
+        else -> "media"
+    }
+    val title = when {
+        isBurned -> "opened"
+        message.isMine -> "view once $mediaWord"
+        else -> "view once $mediaWord"
+    }
+    val subtitle = when {
+        isBurned -> "sealed in ash"
+        message.isMine -> "sent • view once"
+        else -> "tap to view"
+    }
+
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = if (message.isMine) Alignment.End else Alignment.Start,
     ) {
         SteppedBox(
             modifier = Modifier
-                .widthIn(max = 280.dp)
-                .combinedClickable(onClick = onOpen, onLongClick = onLongPress)
+                .widthIn(max = 260.dp)
+                .combinedClickable(onClick = onTapCard, onLongClick = onLongPress)
                 .testTag("view_once_card"),
-            backgroundColor = TheirBubbleFill,
-            borderColor = TheirBubbleBorder,
+            backgroundColor = if (message.isMine) MyBubbleFill else TheirBubbleFill,
+            borderColor = when {
+                isJumpHighlighted -> LanternAmber
+                isBurned -> MothDivider
+                message.isMine -> MyBubbleBorder
+                else -> TheirBubbleBorder
+            },
             cutSize = 4.dp,
             borderWidth = 2.dp,
         ) {
-            Column(modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp)) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    PixelWaxSeal(hasArrow = false)
-                    Column {
-                        val title = when (message.viewOnceStatus) {
-                            ViewOnceStatus.UNOPENED -> "view once"
-                            ViewOnceStatus.REVEALED -> message.text.ifBlank {
-                                when (message.attachmentType) {
-                                    AttachmentType.PHOTO -> "photo revealed"
-                                    AttachmentType.STICKER -> "sticker revealed"
-                                    AttachmentType.VOICE -> "voice note revealed"
-                                    else -> message.attachmentName ?: "file revealed"
-                                }
-                            }
-                            ViewOnceStatus.BURNED -> "message burned"
-                        }
-                        val subtitle = when (message.viewOnceStatus) {
-                            ViewOnceStatus.UNOPENED -> "tap to open"
-                            ViewOnceStatus.REVEALED -> "tap to seal & burn"
-                            ViewOnceStatus.BURNED -> "sealed in ash"
-                        }
+            Row(
+                modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                PixelViewOnceIcon(
+                    tint = if (isBurned) MutedText else if (message.isMine) MyBubbleText else LanternAmber,
+                    active = !isBurned,
+                    modifier = Modifier.size(22.dp),
+                )
+                Column {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    ) {
                         Text(
                             text = title,
                             fontFamily = PixelifySans,
                             fontSize = 14.sp,
                             fontWeight = FontWeight.Bold,
-                            color = if (message.viewOnceStatus == ViewOnceStatus.BURNED) MutedText else TheirBubbleText,
+                            color = if (isBurned) MutedText else if (message.isMine) MyBubbleText else TheirBubbleText,
                         )
-                        Text(
-                            text = subtitle,
-                            fontFamily = PixelifySans,
-                            fontSize = 12.sp,
-                            color = if (message.viewOnceStatus == ViewOnceStatus.BURNED) WaxSealRed else MutedText,
-                        )
+                        if (message.isStarred && !message.isDeleted) {
+                            PixelStarIcon(tint = LanternAmber, filled = true, modifier = Modifier.size(11.dp))
+                        }
                     }
-                }
-
-                if (message.viewOnceStatus == ViewOnceStatus.REVEALED && message.attachmentType != null) {
-                    Spacer(modifier = Modifier.height(8.dp))
-                    AttachmentSection(
-                        message = message,
-                        textColor = TheirBubbleText,
-                        borderColor = TheirBubbleBorder,
-                        onOpenPhoto = onOpenPhoto,
-                        onOpenFile = onOpenFile,
-                        onLongPress = onLongPress,
-                        voicePlayer = null,
+                    Text(
+                        text = subtitle,
+                        fontFamily = PixelifySans,
+                        fontSize = 11.sp,
+                        color = if (isBurned) MutedText else if (message.isMine) MyBubbleText.copy(alpha = 0.78f) else LanternAmber,
                     )
                 }
             }
+        }
+
+        if (isReceiptExpanded) {
+            InlineReceiptLine(message = message)
         }
     }
 }
@@ -2052,10 +2672,13 @@ private fun BubbleBodyContent(
     textColor: Color,
     borderColor: Color,
     highlightQuery: String,
+    onTapBubble: () -> Unit,
     onOpenPhoto: (String) -> Unit,
+    onOpenVideo: (String) -> Unit,
     onOpenFile: (String, String?) -> Unit,
     onLongPress: () -> Unit,
     onJumpToReply: (String) -> Unit,
+    onVoicePlayStarted: (MothMessage) -> Unit = {},
     voicePlayer: VoiceNotePlayer,
 ) {
     Column(
@@ -2067,7 +2690,7 @@ private fun BubbleBodyContent(
     ) {
         if (message.isDeleted) {
             Text(
-                text = "🚫 this message was deleted",
+                text = "this message was deleted",
                 fontFamily = PixelifySans,
                 fontStyle = FontStyle.Italic,
                 fontSize = (13f * fontScale).sp,
@@ -2078,7 +2701,7 @@ private fun BubbleBodyContent(
 
         if (message.isForwarded) {
             Text(
-                text = "↪ forwarded",
+                text = "forwarded",
                 fontFamily = PixelifySans,
                 fontStyle = FontStyle.Italic,
                 fontSize = 10.sp,
@@ -2130,31 +2753,79 @@ private fun BubbleBodyContent(
                 message = message,
                 textColor = textColor,
                 borderColor = borderColor,
+                onTapBubble = onTapBubble,
                 onOpenPhoto = onOpenPhoto,
+                onOpenVideo = onOpenVideo,
                 onOpenFile = onOpenFile,
                 onLongPress = onLongPress,
+                onVoicePlayStarted = onVoicePlayStarted,
                 voicePlayer = voicePlayer,
             )
         }
 
         if (message.text.isNotBlank()) {
-            Text(
-                text = styledMessageText(message.text, message.isMine, highlightQuery),
-                fontFamily = PixelifySans,
-                fontSize = (14f * fontScale).sp,
-                lineHeight = (19f * fontScale).sp,
-                color = textColor,
-                modifier = if (message.attachmentType != null) Modifier.padding(horizontal = 4.dp) else Modifier,
-            )
-        }
-
-        if (message.isPinned || message.isEdited) {
             Row(
+                verticalAlignment = Alignment.Bottom,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
+                modifier = if (message.attachmentType != null) Modifier.padding(horizontal = 4.dp) else Modifier,
+            ) {
+                Text(
+                    text = styledMessageText(message.text, message.isMine, highlightQuery),
+                    fontFamily = PixelifySans,
+                    fontSize = (14f * fontScale).sp,
+                    lineHeight = (19f * fontScale).sp,
+                    color = textColor,
+                    modifier = Modifier.weight(1f, fill = false),
+                )
+                if (message.isStarred || message.isPinned || message.isEdited) {
+                    Row(
+                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(bottom = 2.dp),
+                    ) {
+                        if (message.isPinned) {
+                            PixelPinIcon(
+                                tint = if (message.isMine) MyBubbleText else LanternAmber,
+                                modifier = Modifier.size(11.dp),
+                            )
+                        }
+                        if (message.isStarred) {
+                            PixelStarIcon(
+                                tint = LanternAmber,
+                                filled = true,
+                                modifier = Modifier.size(11.dp),
+                            )
+                        }
+                        if (message.isEdited) {
+                            Text(
+                                text = "edited",
+                                fontFamily = PixelifySans,
+                                fontStyle = FontStyle.Italic,
+                                fontSize = 10.sp,
+                                color = textColor.copy(alpha = 0.7f),
+                            )
+                        }
+                    }
+                }
+            }
+        } else if (message.isStarred || message.isPinned || message.isEdited) {
+            Row(
+                modifier = Modifier.align(Alignment.End),
+                horizontalArrangement = Arrangement.spacedBy(5.dp),
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (message.isPinned) {
-                    Text(text = "📌", fontSize = 10.sp)
+                    PixelPinIcon(
+                        tint = if (message.isMine) MyBubbleText else LanternAmber,
+                        modifier = Modifier.size(11.dp),
+                    )
+                }
+                if (message.isStarred) {
+                    PixelStarIcon(
+                        tint = LanternAmber,
+                        filled = true,
+                        modifier = Modifier.size(11.dp),
+                    )
                 }
                 if (message.isEdited) {
                     Text(
@@ -2210,9 +2881,12 @@ private fun AttachmentSection(
     message: MothMessage,
     textColor: Color,
     borderColor: Color,
+    onTapBubble: () -> Unit,
     onOpenPhoto: (String) -> Unit,
+    onOpenVideo: (String) -> Unit,
     onOpenFile: (String, String?) -> Unit,
     onLongPress: () -> Unit,
+    onVoicePlayStarted: (MothMessage) -> Unit = {},
     voicePlayer: VoiceNotePlayer?,
 ) {
     val path = message.attachmentLocalPath
@@ -2238,15 +2912,78 @@ private fun AttachmentSection(
                 Text("[image unavailable]", fontFamily = PixelifySans, fontSize = 12.sp, color = textColor.copy(alpha = 0.7f))
             }
         }
+        AttachmentType.VIDEO -> {
+            if (fileExists && path != null) {
+                SteppedBox(
+                    modifier = Modifier
+                        .widthIn(min = 175.dp, max = 230.dp)
+                        .combinedClickable(
+                            onClick = { onOpenVideo(path) },
+                            onLongClick = onLongPress,
+                        )
+                        .testTag("video_attachment_${message.id}"),
+                    backgroundColor = MothBgDark.copy(alpha = 0.45f),
+                    borderColor = borderColor,
+                    cutSize = 3.dp,
+                    borderWidth = 1.dp,
+                ) {
+                    Row(
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 12.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    ) {
+                        SteppedBox(
+                            modifier = Modifier.size(34.dp),
+                            backgroundColor = LanternAmber,
+                            borderColor = MyBubbleBorder,
+                            cutSize = 2.dp,
+                            borderWidth = 1.dp,
+                        ) {
+                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                PixelPlayIcon(tint = MothBgDark, modifier = Modifier.size(14.dp))
+                            }
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = message.attachmentName ?: "video",
+                                fontFamily = PixelifySans,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = textColor,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                            )
+                            Text(
+                                text = "video • ${formatFileSize(message.attachmentSizeBytes)}",
+                                fontFamily = PixelifySans,
+                                fontSize = 10.sp,
+                                color = textColor.copy(alpha = 0.75f),
+                            )
+                        }
+                    }
+                }
+            } else {
+                Text("[video unavailable]", fontFamily = PixelifySans, fontSize = 12.sp, color = textColor.copy(alpha = 0.7f))
+            }
+        }
         AttachmentType.VOICE -> {
-            val isPlaying = voicePlayer?.playingMessageId == message.id
-            val dur = message.audioDurationSec
-            val durLabel = "${dur / 60}:${"%02d".format(dur % 60)}"
+            val isPlaying = voicePlayer?.isPlaying == true && voicePlayer.activeMessageId == message.id
+            val frac = (voicePlayer?.progressFor(message.id) ?: 0f).coerceIn(0f, 1f)
+            val totalDurSec = if (voicePlayer?.activeMessageId == message.id && (voicePlayer.durationMs > 0)) {
+                (voicePlayer.durationMs / 1000).coerceAtLeast(1)
+            } else {
+                message.audioDurationSec.coerceAtLeast(1)
+            }
+            val posSec = ((voicePlayer?.positionMsFor(message.id, totalDurSec) ?: 0) / 1000).coerceIn(0, totalDurSec)
+            val posLabel = "${posSec / 60}:${"%02d".format(posSec % 60)}"
+            val durLabel = "${totalDurSec / 60}:${"%02d".format(totalDurSec % 60)}"
+
+            // Outer box tap shows sent/seen status; ONLY play button plays/pauses; seek bar scrubs forward/backward!
             SteppedBox(
                 modifier = Modifier
-                    .widthIn(min = 175.dp, max = 220.dp)
+                    .widthIn(min = 195.dp, max = 235.dp)
                     .combinedClickable(
-                        onClick = { if (fileExists && path != null) voicePlayer?.togglePlay(message.id, path) },
+                        onClick = onTapBubble,
                         onLongClick = onLongPress,
                     )
                     .testTag("voice_attachment_${message.id}"),
@@ -2260,38 +2997,84 @@ private fun AttachmentSection(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
+                    // Dedicated Play / Pause Button
                     SteppedBox(
-                        modifier = Modifier.size(30.dp),
+                        modifier = Modifier
+                            .size(32.dp)
+                            .clickable {
+                                if (fileExists && path != null && voicePlayer != null) {
+                                    val started = voicePlayer.togglePlay(message.id, path)
+                                    if (started) {
+                                        onVoicePlayStarted(message)
+                                    }
+                                }
+                            }
+                            .testTag("voice_play_button_${message.id}"),
                         backgroundColor = LanternAmber,
                         borderColor = MyBubbleBorder,
                         cutSize = 2.dp,
                         borderWidth = 1.dp,
                     ) {
                         Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            Text(
-                                text = if (isPlaying) "⏸" else "▶",
-                                fontSize = 12.sp,
-                                color = MothBgDark,
-                            )
+                            if (isPlaying) {
+                                PixelPauseIcon(tint = MothBgDark, modifier = Modifier.size(13.dp))
+                            } else {
+                                PixelPlayIcon(tint = MothBgDark, modifier = Modifier.size(13.dp))
+                            }
                         }
                     }
+
+                    // Scrubbable Seek Progress Bar + Timer
                     Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                        Box(
+                        BoxWithConstraints(
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .height(6.dp)
-                                .background(MothDivider),
+                                .height(22.dp)
+                                .then(
+                                    if (fileExists && path != null) {
+                                        Modifier
+                                            .pointerInput(message.id, path) {
+                                                detectTapGestures { offset ->
+                                                    val nextFrac = (offset.x / size.width.toFloat().coerceAtLeast(1f)).coerceIn(0f, 1f)
+                                                    voicePlayer?.seekTo(message.id, path, nextFrac)
+                                                }
+                                            }
+                                            .pointerInput(message.id, path) {
+                                                detectHorizontalDragGestures { change, _ ->
+                                                    change.consume()
+                                                    val nextFrac = (change.position.x / size.width.toFloat().coerceAtLeast(1f)).coerceIn(0f, 1f)
+                                                    voicePlayer?.seekTo(message.id, path, nextFrac)
+                                                }
+                                            }
+                                    } else Modifier
+                                )
+                                .testTag("voice_seekbar_${message.id}"),
+                            contentAlignment = Alignment.CenterStart,
                         ) {
-                            val frac = if (isPlaying) (voicePlayer?.progress ?: 0f) else 0f
                             Box(
                                 modifier = Modifier
-                                    .fillMaxWidth(frac.coerceIn(0f, 1f))
-                                    .fillMaxHeight()
-                                    .background(LanternAmber),
+                                    .fillMaxWidth()
+                                    .height(6.dp)
+                                    .background(MothDivider),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth(frac)
+                                        .fillMaxHeight()
+                                        .background(LanternAmber),
+                                )
+                            }
+                            // Pixel thumb indicator
+                            val thumbOffsetDp = (maxWidth - 8.dp) * frac
+                            Box(
+                                modifier = Modifier
+                                    .offset(x = thumbOffsetDp)
+                                    .size(8.dp, 12.dp)
+                                    .background(TheirBubbleText),
                             )
                         }
                         Text(
-                            text = if (isPlaying) "playing • $durLabel" else "voice • $durLabel",
+                            text = if (isPlaying || frac > 0f) "$posLabel / $durLabel" else "voice • $durLabel",
                             fontFamily = PixelifySans,
                             fontSize = 10.sp,
                             color = textColor,

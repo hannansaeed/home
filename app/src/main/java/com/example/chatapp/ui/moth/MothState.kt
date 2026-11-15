@@ -4,6 +4,7 @@ import android.Manifest
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -13,6 +14,8 @@ import android.graphics.Canvas
 import android.graphics.Paint
 import android.net.Uri
 import android.os.Build
+import android.os.Environment
+import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.util.Base64
 import androidx.compose.runtime.*
@@ -23,6 +26,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.example.chatapp.MainActivity
 import com.example.chatapp.R
+import com.example.chatapp.ui.components.decodeOrientedBitmap
 import com.example.chatapp.crypto.EcdhAesGcmCrypto
 import com.example.chatapp.data.local.ChatDatabaseProvider
 import com.example.chatapp.data.local.MothCallLogEntity
@@ -59,11 +63,16 @@ import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 
+class SafExportRequiredException(
+    val fileName: String,
+    val mimeType: String,
+) : Exception("SAF export required on Android < 10")
+
 class MothState(private val context: Context, private val scope: CoroutineScope) {
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
-    private val mothDao = ChatDatabaseProvider.get(appContext).mothDao()
-    val mediaDir: File = File(appContext.filesDir, "moth_media").apply { mkdirs() }
+    private val mothDao by lazy { ChatDatabaseProvider.get(appContext).mothDao() }
+    val mediaDir: File by lazy { File(appContext.filesDir, "moth_media").apply { mkdirs() } }
 
     private val db: FirebaseFirestore by lazy {
         try {
@@ -74,7 +83,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         )
     }
 
-    val crypto = EcdhAesGcmCrypto(appContext)
+    val crypto by lazy { EcdhAesGcmCrypto(appContext) }
     val webRtcManager by lazy { WebRtcCallManager(appContext, db) }
     val voiceRecorder by lazy { VoiceNoteRecorder(appContext, mediaDir, scope) }
     val voicePlayer by lazy { VoiceNotePlayer(scope) }
@@ -86,12 +95,13 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
     var currentUsername by mutableStateOf("")
     var userAvatarColor by mutableStateOf(Color(0xFFB8A9E8))
     var userAvatarPath by mutableStateOf<String?>(null)
+    var userBio by mutableStateOf(prefs.getString(KEY_USER_BIO, "") ?: "")
     var isAppInForeground by mutableStateOf(true)
 
     val isLoggedIn: Boolean
         get() = currentUsername.isNotBlank()
 
-    // Privacy & Screen Controls
+    // Privacy, Screen & Notification Controls
     var screenshotBlockingEnabled by mutableStateOf(prefs.getBoolean(KEY_SCREENSHOT_BLOCK, false))
         private set
     var hideTypingIndicators by mutableStateOf(prefs.getBoolean(KEY_HIDE_TYPING, false))
@@ -104,8 +114,18 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         private set
     var isAppLocked by mutableStateOf(false)
         private set
+    var isViewingViewOnce by mutableStateOf(false)
+    var messageNotificationsEnabled by mutableStateOf(prefs.getBoolean(KEY_MSG_NOTIF, true))
+        private set
+    var callNotificationsEnabled by mutableStateOf(prefs.getBoolean(KEY_CALL_NOTIF, true))
+        private set
+    var notificationPreviewsEnabled by mutableStateOf(prefs.getBoolean(KEY_NOTIF_PREVIEW, true))
+        private set
 
     var conversations by mutableStateOf<List<MothConversation>>(emptyList())
+    var allStarredMessages by mutableStateOf<List<StarredMessageItem>>(emptyList())
+    var customReactionEmojis by mutableStateOf(loadCustomReactionEmojis())
+        private set
     var activeChatId by mutableStateOf<String?>(null)
     var activeMessages by mutableStateOf<List<MothMessage>>(emptyList())
     var isContactTyping by mutableStateOf(false)
@@ -117,6 +137,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
 
     private var localChatsJob: Job? = null
     private var localMessagesJob: Job? = null
+    private var localStarredJob: Job? = null
     private var localStickersJob: Job? = null
     private var localCallLogsJob: Job? = null
     private var burnMonitorJob: Job? = null
@@ -151,8 +172,6 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
     }
 
     init {
-        ensureNotificationChannel()
-
         val savedUser = prefs.getString(KEY_LOGGED_IN_USER, "")?.trim()?.lowercase().orEmpty()
         val savedColorArgb = prefs.getInt(KEY_AVATAR_COLOR, Color(0xFFB8A9E8).toArgb())
         userAvatarColor = Color(savedColorArgb)
@@ -162,12 +181,15 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
             if (appLockEnabled && !prefs.getString(KEY_APP_LOCK_PIN_HASH, null).isNullOrBlank()) {
                 isAppLocked = true
             }
-            loadSavedAvatarForUser(savedUser)
-            startSessionStreams(savedUser)
         }
 
-        // Ensure default support user exists in Firestore directory
+        // Move Room / Keystore / filesystem / notification channel / Firestore bootstrap off main thread
         ioScope.launch {
+            ensureNotificationChannel()
+            if (savedUser.isNotBlank() && currentUsername == savedUser) {
+                loadSavedAvatarForUser(savedUser)
+                startSessionStreams(savedUser)
+            }
             try {
                 val supportRef = db.collection("users").document("support")
                 val snap = supportRef.get().await()
@@ -209,6 +231,21 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
     fun setFontScale(scale: Float) {
         messageFontScale = scale
         prefs.edit().putFloat(KEY_FONT_SCALE, scale).apply()
+    }
+
+    fun setMessageNotifications(enabled: Boolean) {
+        messageNotificationsEnabled = enabled
+        prefs.edit().putBoolean(KEY_MSG_NOTIF, enabled).apply()
+    }
+
+    fun setCallNotifications(enabled: Boolean) {
+        callNotificationsEnabled = enabled
+        prefs.edit().putBoolean(KEY_CALL_NOTIF, enabled).apply()
+    }
+
+    fun setNotificationPreviews(enabled: Boolean) {
+        notificationPreviewsEnabled = enabled
+        prefs.edit().putBoolean(KEY_NOTIF_PREVIEW, enabled).apply()
     }
 
     fun enableAppLock(pin: String): Boolean {
@@ -324,6 +361,30 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
     // Profile & Avatars
     // -------------------------------------------------------------------------
 
+    private fun loadCustomReactionEmojis(): List<String> {
+        val raw = prefs.getString(KEY_CUSTOM_REACTIONS, null)
+        if (raw.isNullOrBlank()) return DEFAULT_REACTIONS
+        return try {
+            val arr = JSONArray(raw)
+            val parsed = (0 until arr.length()).mapNotNull { arr.optString(it).takeIf { s -> s.isNotBlank() } }
+            if (parsed.isNotEmpty()) parsed.take(8) else DEFAULT_REACTIONS
+        } catch (_: Exception) {
+            DEFAULT_REACTIONS
+        }
+    }
+
+    fun updateCustomReactionEmojis(emojis: List<String>) {
+        val clean = emojis.map { it.trim() }.filter { it.isNotBlank() }.distinct().take(8)
+        if (clean.isEmpty()) return
+        customReactionEmojis = clean
+        prefs.edit().putString(KEY_CUSTOM_REACTIONS, JSONArray(clean).toString()).apply()
+    }
+
+    fun resetCustomReactionEmojis() {
+        customReactionEmojis = DEFAULT_REACTIONS
+        prefs.edit().remove(KEY_CUSTOM_REACTIONS).apply()
+    }
+
     fun updateAvatarColor(color: Color) {
         userAvatarColor = color
         prefs.edit().putInt(KEY_AVATAR_COLOR, color.toArgb()).apply()
@@ -340,21 +401,161 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         }
     }
 
-    suspend fun updateCustomAvatar(uri: Uri): Result<Unit> = withContext(Dispatchers.IO) {
+    fun updateBio(newBio: String, onComplete: () -> Unit = {}) {
+        val clean = newBio.trim().take(120)
+        userBio = clean
+        prefs.edit().putString(KEY_USER_BIO, clean).apply()
         val user = currentUsername
-        if (user.isBlank()) return@withContext Result.failure(IllegalStateException("Not logged in"))
-        try {
-            val bitmap = appContext.contentResolver.openInputStream(uri)?.use {
-                BitmapFactory.decodeStream(it)
-            } ?: return@withContext Result.failure(IllegalArgumentException("Unable to read photo"))
+        if (user.isBlank()) {
+            onComplete()
+            return
+        }
+        scope.launch {
+            try {
+                withContext(Dispatchers.IO) {
+                    db.collection("users").document(user).set(
+                        mapOf("bio" to clean),
+                        SetOptions.merge()
+                    ).await()
+                }
+            } catch (_: Exception) {}
+            onComplete()
+        }
+    }
 
+    fun updatePassphrase(currentPass: String, newPass: String, onResult: (String?) -> Unit) {
+        val user = currentUsername
+        val cleanCurrent = currentPass.trim()
+        val cleanNew = newPass.trim()
+        if (user.isBlank()) {
+            onResult("Not logged in"); return
+        }
+        if (cleanNew.length < 3) {
+            onResult("New passphrase must be at least 3 characters"); return
+        }
+        scope.launch {
+            try {
+                val userRef = db.collection("users").document(user)
+                val doc = withContext(Dispatchers.IO) { userRef.get().await() }
+                val stored = doc.getString("passphrase") ?: ""
+                if (stored != cleanCurrent) {
+                    onResult("Current passphrase is incorrect")
+                    return@launch
+                }
+                withContext(Dispatchers.IO) {
+                    userRef.update("passphrase", cleanNew).await()
+                }
+                onResult(null)
+            } catch (e: Exception) {
+                onResult(e.localizedMessage ?: "Failed to update passphrase")
+            }
+        }
+    }
+
+    fun changeUsername(newUsername: String, onResult: (String?) -> Unit) {
+        val oldUser = currentUsername
+        val cleanNew = newUsername.trim().lowercase()
+        if (oldUser.isBlank()) {
+            onResult("Not logged in"); return
+        }
+        if (cleanNew.length < 3) {
+            onResult("Username must be at least 3 characters"); return
+        }
+        if (cleanNew == oldUser) {
+            onResult(null); return
+        }
+        scope.launch {
+            try {
+                val newUserRef = db.collection("users").document(cleanNew)
+                val newDoc = withContext(Dispatchers.IO) { newUserRef.get().await() }
+                if (newDoc.exists()) {
+                    onResult("Lantern handle '$cleanNew' is already taken")
+                    return@launch
+                }
+                withContext(Dispatchers.IO) {
+                    val oldUserRef = db.collection("users").document(oldUser)
+                    val oldDoc = oldUserRef.get().await()
+                    val data = (oldDoc.data ?: emptyMap()).toMutableMap()
+                    data["username"] = cleanNew
+                    newUserRef.set(data).await()
+
+                    // Migrate cloud chats subcollection
+                    val oldChatsSnap = oldUserRef.collection("chats").get().await()
+                    for (chatDoc in oldChatsSnap.documents) {
+                        val chatData = (chatDoc.data ?: emptyMap()).toMutableMap()
+                        val docKey = chatDoc.id
+                        chatData["ownerUsername"] = cleanNew
+                        if (chatData["isGroup"] != true) {
+                            chatData["id"] = chatIdFor(cleanNew, docKey)
+                        } else {
+                            chatData["id"] = chatIdFor(cleanNew, docKey)
+                        }
+                        newUserRef.collection("chats").document(docKey).set(chatData).await()
+                    }
+                    // Migrate cloud stickers subcollection
+                    val oldStickersSnap = oldUserRef.collection("stickers").get().await()
+                    for (stkDoc in oldStickersSnap.documents) {
+                        stkDoc.data?.let { newUserRef.collection("stickers").document(stkDoc.id).set(it).await() }
+                    }
+
+                    // Preserve E2EE keypair under new username
+                    crypto.copyUserKeyPairForRename(oldUser, cleanNew)
+
+                    // Migrate local Room rows
+                    val existingChats = mothDao.getChatsOnce(oldUser)
+                    for (c in existingChats) {
+                        val suffix = c.id.substringAfter("::", c.otherUsername)
+                        val nextChatId = chatIdFor(cleanNew, suffix)
+                        mothDao.updateChatId(c.id, nextChatId)
+                        mothDao.updateMessagesChatId(c.id, nextChatId)
+                    }
+                    mothDao.migrateChatsOwner(oldUser, cleanNew)
+                    mothDao.migrateMessagesOwner(oldUser, cleanNew)
+                    mothDao.migrateStickersOwner(oldUser, cleanNew)
+                    mothDao.migrateCallLogsOwner(oldUser, cleanNew)
+
+                    prefs.getString("${KEY_AVATAR_PATH}_$oldUser", null)?.let { oldPath ->
+                        prefs.edit().putString("${KEY_AVATAR_PATH}_$cleanNew", oldPath).apply()
+                    }
+                    try { db.collection("presence").document(oldUser).delete().await() } catch (_: Exception) {}
+                }
+
+                persistSession(cleanNew)
+                loadSavedAvatarForUser(cleanNew)
+                startSessionStreams(cleanNew)
+                onResult(null)
+            } catch (e: Exception) {
+                onResult(e.localizedMessage ?: "Failed to change username")
+            }
+        }
+    }
+
+    suspend fun updateCustomAvatar(uri: Uri): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val bitmap = decodeOrientedBitmap(appContext, uri, maxDim = 1200)
+                ?: return@withContext Result.failure(IllegalArgumentException("Unable to read photo"))
             val side = minOf(bitmap.width, bitmap.height)
             val xOff = (bitmap.width - side) / 2
             val yOff = (bitmap.height - side) / 2
             val cropped = Bitmap.createBitmap(bitmap, xOff, yOff, side, side)
-            val scaled = if (side > 300) {
-                Bitmap.createScaledBitmap(cropped, 300, 300, true)
-            } else cropped
+            if (cropped !== bitmap) bitmap.recycle()
+            try {
+                updateCustomAvatarBitmap(cropped)
+            } finally {
+                if (!cropped.isRecycled) cropped.recycle()
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun updateCustomAvatarBitmap(bitmap: Bitmap): Result<Unit> = withContext(Dispatchers.IO) {
+        val user = currentUsername
+        if (user.isBlank()) return@withContext Result.failure(IllegalStateException("Not logged in"))
+        try {
+            val scaled = if (bitmap.width > 300 || bitmap.height > 300) {
+                Bitmap.createScaledBitmap(bitmap, 300, 300, true)
+            } else bitmap
 
             val outStream = ByteArrayOutputStream()
             var quality = 80
@@ -365,16 +566,16 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                 scaled.compress(Bitmap.CompressFormat.JPEG, quality, outStream)
             }
 
-            if (scaled !== cropped) scaled.recycle()
-            if (cropped !== bitmap) cropped.recycle()
-            bitmap.recycle()
+            if (scaled !== bitmap) scaled.recycle()
 
             val bytes = outStream.toByteArray()
             val avatarFile = File(mediaDir, "my_avatar_${user}_${System.currentTimeMillis()}.jpg")
             avatarFile.writeBytes(bytes)
             deleteOldUserAvatarFiles(user, keepPath = avatarFile.absolutePath)
 
-            userAvatarPath = avatarFile.absolutePath
+            withContext(Dispatchers.Main) {
+                userAvatarPath = avatarFile.absolutePath
+            }
             prefs.edit().putString("${KEY_AVATAR_PATH}_$user", avatarFile.absolutePath).apply()
 
             val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
@@ -418,11 +619,15 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         onSuccess: () -> Unit,
         onError: (String) -> Unit
     ) {
-        val cleanUser = username.trim().lowercase()
+        val cleanUser = username.trim().removePrefix("@").lowercase()
         val cleanPass = passphrase.trim()
 
         if (cleanUser.length < 3) {
             onError("Username must be at least 3 characters")
+            return
+        }
+        if (cleanUser.contains("/")) {
+            onError("Username cannot contain '/'")
             return
         }
         if (cleanPass.length < 3) {
@@ -439,19 +644,23 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                     return@launch
                 }
 
-                val myPubKey = crypto.initializeForUser(cleanUser)
-                val userPayload = mapOf(
-                    "username" to cleanUser,
-                    "passphrase" to cleanPass,
-                    "avatarColorArgb" to userAvatarColor.toArgb().toLong(),
-                    "e2eePublicKey" to myPubKey,
-                    "createdAt" to FieldValue.serverTimestamp()
-                )
-                withContext(Dispatchers.IO) { userRef.set(userPayload).await() }
+                withContext(Dispatchers.IO) {
+                    val myPubKey = crypto.initializeForUser(cleanUser)
+                    val userPayload = mapOf(
+                        "username" to cleanUser,
+                        "passphrase" to cleanPass,
+                        "avatarColorArgb" to userAvatarColor.toArgb().toLong(),
+                        "e2eePublicKey" to myPubKey,
+                        "createdAt" to FieldValue.serverTimestamp()
+                    )
+                    userRef.set(userPayload).await()
+                }
 
                 persistSession(cleanUser)
-                loadSavedAvatarForUser(cleanUser)
-                startSessionStreams(cleanUser)
+                withContext(Dispatchers.IO) {
+                    loadSavedAvatarForUser(cleanUser)
+                    startSessionStreams(cleanUser)
+                }
                 onSuccess()
             } catch (e: Exception) {
                 onError(e.localizedMessage ?: "Registration failed")
@@ -465,11 +674,15 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         onSuccess: () -> Unit,
         onError: (String) -> Unit
     ) {
-        val cleanUser = username.trim().lowercase()
+        val cleanUser = username.trim().removePrefix("@").lowercase()
         val cleanPass = passphrase.trim()
 
         if (cleanUser.isBlank() || cleanPass.isBlank()) {
             onError("Please enter username and passphrase")
+            return
+        }
+        if (cleanUser.contains("/")) {
+            onError("Invalid lantern handle")
             return
         }
 
@@ -493,22 +706,29 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                     userAvatarColor = Color(remoteColor.toInt())
                     prefs.edit().putInt(KEY_AVATAR_COLOR, remoteColor.toInt()).apply()
                 }
+                val remoteBio = doc.getString("bio").orEmpty()
+                userBio = remoteBio
+                prefs.edit().putString(KEY_USER_BIO, remoteBio).apply()
                 val remoteAvatarBase64 = doc.getString("avatarBase64")
-                if (!remoteAvatarBase64.isNullOrBlank()) {
-                    val dest = File(mediaDir, "my_avatar_${cleanUser}.jpg")
-                    try {
-                        dest.writeBytes(Base64.decode(remoteAvatarBase64, Base64.NO_WRAP))
-                        deleteOldUserAvatarFiles(cleanUser, keepPath = dest.absolutePath)
-                        prefs.edit().putString("${KEY_AVATAR_PATH}_$cleanUser", dest.absolutePath).apply()
-                    } catch (_: Exception) {}
-                } else {
-                    deleteOldUserAvatarFiles(cleanUser, keepPath = null)
-                    prefs.edit().remove("${KEY_AVATAR_PATH}_$cleanUser").apply()
+                withContext(Dispatchers.IO) {
+                    if (!remoteAvatarBase64.isNullOrBlank()) {
+                        val dest = File(mediaDir, "my_avatar_${cleanUser}.jpg")
+                        try {
+                            dest.writeBytes(Base64.decode(remoteAvatarBase64, Base64.NO_WRAP))
+                            deleteOldUserAvatarFiles(cleanUser, keepPath = dest.absolutePath)
+                            prefs.edit().putString("${KEY_AVATAR_PATH}_$cleanUser", dest.absolutePath).apply()
+                        } catch (_: Exception) {}
+                    } else {
+                        deleteOldUserAvatarFiles(cleanUser, keepPath = null)
+                        prefs.edit().remove("${KEY_AVATAR_PATH}_$cleanUser").apply()
+                    }
                 }
 
                 persistSession(cleanUser)
-                loadSavedAvatarForUser(cleanUser)
-                startSessionStreams(cleanUser)
+                withContext(Dispatchers.IO) {
+                    loadSavedAvatarForUser(cleanUser)
+                    startSessionStreams(cleanUser)
+                }
                 onSuccess()
             } catch (e: Exception) {
                 onError(e.localizedMessage ?: "Login failed")
@@ -536,6 +756,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         prefs.edit().remove(KEY_LOGGED_IN_USER).apply()
         localChatsJob?.cancel(); localChatsJob = null
         localMessagesJob?.cancel(); localMessagesJob = null
+        localStarredJob?.cancel(); localStarredJob = null
         localStickersJob?.cancel(); localStickersJob = null
         localCallLogsJob?.cancel(); localCallLogsJob = null
         burnMonitorJob?.cancel(); burnMonitorJob = null
@@ -561,9 +782,11 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         groupKeysCache.clear()
         currentUsername = ""
         userAvatarPath = null
+        userBio = ""
         activeChatId = null
         isAppLocked = false
         conversations = emptyList()
+        allStarredMessages = emptyList()
         activeMessages = emptyList()
         customStickers = emptyList()
         callLogs = emptyList()
@@ -610,6 +833,11 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                                 withContext(Dispatchers.Main) { userAvatarColor = colorObj }
                                 prefs.edit().putInt(KEY_AVATAR_COLOR, remoteColor.toInt()).apply()
                             }
+                        }
+                        val remoteBio = doc.getString("bio").orEmpty()
+                        if (userBio != remoteBio) {
+                            withContext(Dispatchers.Main) { userBio = remoteBio }
+                            prefs.edit().putString(KEY_USER_BIO, remoteBio).apply()
                         }
                         val remoteBase64 = doc.getString("avatarBase64")
                         if (!remoteBase64.isNullOrBlank()) {
@@ -673,6 +901,8 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                                     isLit = doc.getBoolean("isLit") ?: (local?.isLit ?: false),
                                     isDisappearing = doc.getBoolean("isDisappearing") ?: false,
                                     isViewOnce = doc.getBoolean("isViewOnce") ?: false,
+                                    isPinned = doc.getBoolean("isPinned") ?: (local?.isPinned ?: false),
+                                    isMuted = doc.getBoolean("isMuted") ?: (local?.isMuted ?: false),
                                     updatedAt = maxOf(cloudUpdatedAt, local?.updatedAt ?: 0L),
                                     isGroup = isGroup,
                                     groupIcon = doc.getString("groupIcon") ?: (local?.groupIcon ?: "🏮"),
@@ -759,10 +989,35 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                         isLit = if (entity.isGroup) true else isContactOnline(entity.otherUsername),
                         isDisappearing = entity.isDisappearing,
                         isViewOnce = entity.isViewOnce,
+                        isPinned = entity.isPinned,
+                        isMuted = entity.isMuted,
                         isGroup = entity.isGroup,
                         groupIcon = entity.groupIcon,
                         admins = jsonArrayToList(entity.adminsJson),
                         members = jsonArrayToList(entity.membersJson),
+                    )
+                }
+            }
+        }
+
+        // Observe starred messages across all chats
+        localStarredJob?.cancel()
+        localStarredJob = scope.launch {
+            mothDao.observeStarredMessages(username).collect { entities ->
+                val chatsMap = withContext(Dispatchers.IO) {
+                    mothDao.getChatsOnce(username).associateBy { it.id }
+                }
+                allStarredMessages = entities.filter { !it.isDeleted }.map { entity ->
+                    val chat = chatsMap[entity.chatId]
+                    val chatTitle = when {
+                        chat == null -> entity.chatId.substringAfter("::")
+                        chat.isGroup -> chat.otherUsername
+                        else -> "@${chat.otherUsername}"
+                    }
+                    StarredMessageItem(
+                        chatId = entity.chatId,
+                        chatName = chatTitle,
+                        message = mapMessageEntity(entity, username),
                     )
                 }
             }
@@ -799,15 +1054,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         }
 
         // Background burning ticker
-        burnMonitorJob?.cancel()
-        burnMonitorJob = ioScope.launch {
-            while (isActive && currentUsername == username) {
-                try {
-                    processBurningMessages(username)
-                } catch (_: Throwable) {}
-                delay(500L)
-            }
-        }
+        startBurnMonitor(username)
 
         // Presence heartbeat
         presenceHeartbeatJob?.cancel()
@@ -822,14 +1069,18 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
             }
         }
 
-        // Incoming WebRTC call listener
+        // Incoming WebRTC call listener (single-field query avoids composite index errors)
         incomingCallListener?.remove()
         incomingCallListener = db.collection("call_sessions")
             .whereEqualTo("callee", username)
-            .whereEqualTo("status", "RINGING")
             .addSnapshotListener { snap, error ->
                 if (error != null || snap == null || currentUsername != username) return@addSnapshotListener
-                val doc = snap.documents.firstOrNull()
+                val nowMs = System.currentTimeMillis()
+                val doc = snap.documents.firstOrNull { d ->
+                    val status = d.getString("status") ?: ""
+                    val created = d.getLong("createdAt") ?: nowMs
+                    status == "RINGING" && (nowMs - created) < 90_000L
+                }
                 if (doc != null && activeCall == null) {
                     val callId = doc.id
                     val caller = doc.getString("caller")?.lowercase().orEmpty()
@@ -946,6 +1197,12 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                 return
             }
 
+            "VIEW_ONCE_OPENED" -> {
+                val targetMsgId = doc.getString("targetMsgId") ?: return
+                burnLocalViewOnceAndCleanup(username, targetMsgId)
+                return
+            }
+
             "RECEIPT" -> {
                 val statusStr = doc.getString("receiptStatus") ?: return
                 val receiptAt = doc.getLong("receiptAt") ?: System.currentTimeMillis()
@@ -957,14 +1214,28 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                     val currentRank = statusRank(existing.status)
                     val targetRank = statusRank(newStatus.name)
                     if (targetRank > currentRank) {
+                        val deliveredMs = when {
+                            newStatus == MessageStatus.DELIVERED -> receiptAt
+                            newStatus == MessageStatus.READ && existing.deliveredAt <= 0L -> receiptAt
+                            else -> 0L
+                        }
+                        val readMs = if (newStatus == MessageStatus.READ) receiptAt else 0L
                         mothDao.updateMessageStatus(
                             localId = localId,
                             status = newStatus.name,
-                            deliveredAt = if (newStatus == MessageStatus.DELIVERED) receiptAt else 0L,
-                            readAt = if (newStatus == MessageStatus.READ) receiptAt else 0L,
+                            deliveredAt = deliveredMs,
+                            readAt = readMs,
                         )
                     }
                 }
+                return
+            }
+
+            "VOICE_LISTENED" -> {
+                val targetMsgId = doc.getString("targetMsgId") ?: return
+                val listenedAt = doc.getLong("listenedAt") ?: System.currentTimeMillis()
+                val localId = localMsgIdFor(username, targetMsgId)
+                mothDao.updateMessageListened(localId, listenedAt)
                 return
             }
         }
@@ -1012,6 +1283,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
 
         val existingMsg = mothDao.getMessage(localMsgId)
         if (existingMsg == null) {
+            val isCurrentlyOpen = activeChatId == chatId && isAppInForeground
             val skew = receivedAt - timestamp
             val burnStart = if (msgType == MessageType.DISAPPEARING) {
                 if (skew in 0L..8_000L) timestamp else receivedAt
@@ -1042,14 +1314,14 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                     replyToSender = replyToSender,
                     replyToPreview = replyToPreview,
                     isForwarded = isForwarded,
-                    status = MessageStatus.DELIVERED.name,
+                    status = if (isCurrentlyOpen) MessageStatus.READ.name else MessageStatus.DELIVERED.name,
                     sentAt = timestamp,
                     deliveredAt = receivedAt,
+                    readAt = if (isCurrentlyOpen) receivedAt else 0L,
                 )
             )
 
             val existingChat = mothDao.getChat(chatId)
-            val isCurrentlyOpen = activeChatId == chatId && isAppInForeground
             val preview = buildPreviewText(
                 text = text,
                 type = msgType,
@@ -1092,9 +1364,13 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                 sendReceiptRelay(username, sender, listOf(msgId), receiptStatus)
             }
 
-            if (!isCurrentlyOpen) {
+            if (!isCurrentlyOpen && !updatedChat.isMuted) {
                 val notifTitle = if (groupId != null) "${existingChat?.otherUsername ?: "group"} • $sender" else sender
-                val notifText = buildNotificationBody(text, msgType, attachmentType, attachmentName)
+                val notifText = if (notificationPreviewsEnabled) {
+                    buildNotificationBody(text, msgType, attachmentType, attachmentName)
+                } else {
+                    "new encrypted whisper"
+                }
                 showIncomingMessageNotification(notifTitle, notifText, groupId ?: sender)
             }
         }
@@ -1228,7 +1504,9 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         }
     }
 
-    private fun showIncomingMessageNotification(title: String, body: String, openTarget: String) {
+    private fun showIncomingMessageNotification(title: String, body: String, openTarget: String, isCall: Boolean = false) {
+        if (isCall && !callNotificationsEnabled) return
+        if (!isCall && !messageNotificationsEnabled) return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val granted = ContextCompat.checkSelfPermission(
                 appContext,
@@ -1263,19 +1541,52 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
     }
 
     private fun showIncomingCallNotification(caller: String, callType: CallType) {
-        showIncomingMessageNotification("@$caller", "incoming voice call", caller)
+        showIncomingMessageNotification("@$caller", "incoming voice call", caller, isCall = true)
+    }
+
+    private fun startBurnMonitor(username: String) {
+        if (username.isBlank()) return
+        burnMonitorJob?.cancel()
+        burnMonitorJob = ioScope.launch {
+            while (isActive && currentUsername == username) {
+                try {
+                    processBurningMessages(username)
+                } catch (_: Throwable) {}
+                delay(500L)
+            }
+        }
+    }
+
+    fun ensureBurnMonitorRunning() {
+        val owner = currentUsername
+        if (owner.isNotBlank() && burnMonitorJob?.isActive != true) {
+            startBurnMonitor(owner)
+        }
+    }
+
+    suspend fun tickBurningMessagesNow() {
+        val owner = currentUsername
+        if (owner.isBlank()) return
+        withContext(Dispatchers.IO) {
+            try {
+                processBurningMessages(owner)
+            } catch (_: Throwable) {}
+        }
     }
 
     private suspend fun processBurningMessages(ownerUsername: String) = burnMutex.withLock {
         val disappearing = mothDao.getDisappearingMessages(ownerUsername)
         if (disappearing.isEmpty()) return@withLock
         val now = System.currentTimeMillis()
+        val openChatId = activeChatId
+        var touchedActiveChat = false
 
         for (msg in disappearing) {
             val startAt = if (msg.burnStartAt > 0L) msg.burnStartAt else msg.timestamp
             val elapsed = (now - startAt).coerceAtLeast(0L)
 
             if (elapsed >= BURN_DURATION_MS) {
+                if (msg.chatId == openChatId) touchedActiveChat = true
                 if (!msg.attachmentLocalPath.isNullOrBlank()) {
                     try {
                         val file = File(msg.attachmentLocalPath)
@@ -1330,6 +1641,17 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                 val newEmbers = (10 - (elapsed / BURN_STEP_MS).toInt()).coerceIn(1, 10)
                 if (newEmbers != msg.embersRemaining) {
                     mothDao.updateEmbers(msg.localId, newEmbers)
+                    if (msg.chatId == openChatId) touchedActiveChat = true
+                }
+            }
+        }
+
+        if (touchedActiveChat && openChatId != null) {
+            val latestEntities = mothDao.getMessagesByChatOnce(ownerUsername, openChatId)
+            val mapped = latestEntities.map { entity -> mapMessageEntity(entity, ownerUsername) }
+            withContext(Dispatchers.Main) {
+                if (activeChatId == openChatId) {
+                    activeMessages = mapped
                 }
             }
         }
@@ -1338,11 +1660,13 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
     private suspend fun syncChatToCloud(chat: MothChatEntity) {
         try {
             if (chat.ownerUsername.isBlank() || chat.otherUsername.isBlank()) return
-            val docKey = if (chat.isGroup) chat.id.substringAfter("::") else chat.otherUsername
+            val owner = chat.ownerUsername
+            val other = chat.otherUsername
+            val docKey = if (chat.isGroup) chat.id.substringAfter("::") else other
             val payload = hashMapOf<String, Any>(
                 "id" to chat.id,
-                "ownerUsername" to chat.ownerUsername,
-                "otherUsername" to chat.otherUsername,
+                "ownerUsername" to owner,
+                "otherUsername" to other,
                 "preview" to chat.preview,
                 "time" to chat.time,
                 "avatarColorArgb" to chat.avatarColorArgb,
@@ -1350,19 +1674,53 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                 "isLit" to chat.isLit,
                 "isDisappearing" to chat.isDisappearing,
                 "isViewOnce" to chat.isViewOnce,
+                "isPinned" to chat.isPinned,
+                "isMuted" to chat.isMuted,
                 "updatedAt" to chat.updatedAt,
                 "isGroup" to chat.isGroup,
                 "groupIcon" to chat.groupIcon,
                 "adminsJson" to chat.adminsJson,
                 "membersJson" to chat.membersJson,
             )
-            if (chat.isGroup) payload["groupId"] = docKey
-            db.collection("users")
-                .document(chat.ownerUsername)
-                .collection("chats")
-                .document(docKey)
-                .set(payload, SetOptions.merge())
-                .await()
+            if (chat.isGroup) {
+                payload["groupId"] = docKey
+                db.collection("users")
+                    .document(owner)
+                    .collection("chats")
+                    .document(docKey)
+                    .set(payload, SetOptions.merge())
+                    .await()
+            } else {
+                db.collection("users")
+                    .document(owner)
+                    .collection("chats")
+                    .document(other)
+                    .set(payload, SetOptions.merge())
+                    .await()
+
+                if (other != "support") {
+                    val peerPayload = hashMapOf<String, Any>(
+                        "id" to chatIdFor(other, owner),
+                        "ownerUsername" to other,
+                        "otherUsername" to owner,
+                        "preview" to chat.preview,
+                        "time" to chat.time,
+                        "avatarColorArgb" to chat.avatarColorArgb,
+                        "unreadCount" to 0,
+                        "isLit" to true,
+                        "isDisappearing" to chat.isDisappearing,
+                        "isViewOnce" to chat.isViewOnce,
+                        "updatedAt" to chat.updatedAt,
+                        "isGroup" to false,
+                    )
+                    db.collection("users")
+                        .document(other)
+                        .collection("chats")
+                        .document(owner)
+                        .set(peerPayload, SetOptions.merge())
+                        .await()
+                }
+            }
         } catch (_: Exception) {}
     }
 
@@ -1397,6 +1755,9 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                     time = timeStr,
                     timestamp = now - 2000L,
                     status = MessageStatus.READ.name,
+                    sentAt = now - 2000L,
+                    deliveredAt = now - 2000L,
+                    readAt = now - 2000L,
                 )
             )
             mothDao.upsertMessage(
@@ -1411,6 +1772,9 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                     time = timeStr,
                     timestamp = now - 1000L,
                     status = MessageStatus.READ.name,
+                    sentAt = now - 1000L,
+                    deliveredAt = now - 1000L,
+                    readAt = now - 1000L,
                 )
             )
         }
@@ -1441,6 +1805,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         lastTypingSentState = false
 
         startObservingLocalMessages(owner, chatId)
+        ensureBurnMonitorRunning()
 
         if (target?.isGroup == true || otherUser.startsWith("grp_")) {
             activeContactPresence = ContactPresence(isOnline = true, label = "${target?.members?.size ?: 1} members")
@@ -1464,7 +1829,6 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
     }
 
     private suspend fun markIncomingMessagesAsRead(owner: String, chatId: String, otherUser: String, isGroup: Boolean) {
-        if (isGroup || otherUser == "support" || disableReadReceipts) return
         val msgs = mothDao.getMessagesByChatOnce(owner, chatId)
         val unreadIncoming = msgs.filter {
             !it.senderUsername.equals(owner, ignoreCase = true) && it.status != MessageStatus.READ.name
@@ -1472,9 +1836,16 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         if (unreadIncoming.isEmpty()) return
         val now = System.currentTimeMillis()
         unreadIncoming.forEach { m ->
-            mothDao.updateMessageStatus(m.localId, MessageStatus.READ.name, readAt = now)
+            mothDao.updateMessageStatus(
+                localId = m.localId,
+                status = MessageStatus.READ.name,
+                deliveredAt = if (m.deliveredAt <= 0L) now else 0L,
+                readAt = now,
+            )
         }
-        sendReceiptRelay(owner, otherUser, unreadIncoming.map { it.id }, MessageStatus.READ)
+        if (!isGroup && otherUser != "support" && !disableReadReceipts) {
+            sendReceiptRelay(owner, otherUser, unreadIncoming.map { it.id }, MessageStatus.READ)
+        }
     }
 
     private suspend fun sendReceiptRelay(sender: String, recipient: String, targetMsgIds: List<String>, status: MessageStatus) {
@@ -1706,6 +2077,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
 
         var avatarPath = localChat?.avatarLocalPath?.takeIf { File(it).exists() }
         var avatarColor = Color((localChat?.avatarColorArgb ?: avatarColorForUsername(clean).toArgb().toLong()).toInt())
+        var bio = ""
         var joinedLabel = "unknown"
         var isOnline = false
         var statusLabel = "offline"
@@ -1714,6 +2086,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
             val userDoc = db.collection("users").document(clean).get().await()
             if (userDoc.exists()) {
                 userDoc.getLong("avatarColorArgb")?.let { avatarColor = Color(it.toInt()) }
+                bio = userDoc.getString("bio").orEmpty()
                 val base64 = userDoc.getString("avatarBase64")
                 val file = File(mediaDir, "contact_avatar_${clean}.jpg")
                 if (!base64.isNullOrBlank()) {
@@ -1741,11 +2114,55 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
             username = clean,
             avatarPath = avatarPath,
             avatarColor = avatarColor,
+            bio = bio,
             isOnline = isOnline,
             statusLabel = statusLabel,
             joinedLabel = joinedLabel,
             localMessageCount = msgCount,
         )
+    }
+
+    fun getPeerKeyFingerprint(username: String): String {
+        val clean = username.trim().lowercase()
+        if (clean == "support") return "local device lantern"
+        return crypto.getPeerFingerprint(clean) ?: "awaiting key exchange"
+    }
+
+    suspend fun computeStorageStats(): StorageStats = withContext(Dispatchers.IO) {
+        val owner = currentUsername
+        if (owner.isBlank()) return@withContext StorageStats()
+        val mediaBytes = mediaDir.listFiles()?.sumOf { if (it.isFile) it.length() else 0L } ?: 0L
+        val msgCount = mothDao.getTotalMessageCount(owner)
+        val chatCount = mothDao.getTotalChatCount(owner)
+        val callCount = mothDao.getTotalCallLogCount(owner)
+        StorageStats(
+            mediaBytes = mediaBytes,
+            messageCount = msgCount,
+            chatCount = chatCount,
+            callLogCount = callCount,
+        )
+    }
+
+    suspend fun clearCachedMedia() = withContext(Dispatchers.IO) {
+        val owner = currentUsername
+        if (owner.isBlank()) return@withContext
+        val keepPaths = buildSet {
+            addAll(mothDao.getAllStickerPaths())
+            addAll(mothDao.getAllChatAvatarPaths())
+            userAvatarPath?.let { add(it) }
+        }
+        mediaDir.listFiles()?.forEach { file ->
+            if (file.isFile && file.absolutePath !in keepPaths) {
+                try { file.delete() } catch (_: Exception) {}
+            }
+        }
+        mothDao.clearAllAttachmentPaths(owner)
+    }
+
+    suspend fun clearAllCallLogs() = withContext(Dispatchers.IO) {
+        val owner = currentUsername
+        if (owner.isBlank()) return@withContext
+        mothDao.clearAllCallLogs(owner)
     }
 
     fun markAllAsRead() {
@@ -1759,57 +2176,61 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         }
     }
 
+    private fun mapMessageEntity(entity: MothMessageEntity, ownerUsername: String): MothMessage {
+        val type = try { MessageType.valueOf(entity.type) } catch (_: Exception) { MessageType.REGULAR }
+        val voStatus = try { ViewOnceStatus.valueOf(entity.viewOnceStatus) } catch (_: Exception) { ViewOnceStatus.UNOPENED }
+        val attType = entity.attachmentType?.let {
+            try { AttachmentType.valueOf(it) } catch (_: Exception) { null }
+        }
+        val statusEnum = try { MessageStatus.valueOf(entity.status) } catch (_: Exception) { MessageStatus.SENT }
+        val reactionsMap = parseReactionsJson(entity.reactionsJson)
+        val (count, hasMine) = if (reactionsMap.isNotEmpty()) {
+            computeReactionSummary(reactionsMap, ownerUsername)
+        } else {
+            entity.reactionCount to entity.hasReacted
+        }
+
+        return MothMessage(
+            id = entity.id,
+            senderUsername = entity.senderUsername,
+            text = entity.text,
+            isMine = entity.senderUsername.equals(ownerUsername, ignoreCase = true),
+            type = type,
+            reactionCount = count,
+            hasReacted = hasMine,
+            reactions = reactionsMap,
+            viewOnceStatus = voStatus,
+            embersRemaining = entity.embersRemaining,
+            leaveTrace = entity.leaveTrace,
+            burnStartAt = entity.burnStartAt,
+            time = entity.time,
+            attachmentType = attType,
+            attachmentName = entity.attachmentName,
+            attachmentLocalPath = entity.attachmentLocalPath,
+            attachmentMimeType = entity.attachmentMimeType,
+            attachmentSizeBytes = entity.attachmentSizeBytes,
+            audioDurationSec = entity.audioDurationSec,
+            replyToId = entity.replyToId,
+            replyToSender = entity.replyToSender,
+            replyToPreview = entity.replyToPreview,
+            isForwarded = entity.isForwarded,
+            isEdited = entity.isEdited,
+            isDeleted = entity.isDeleted,
+            isPinned = entity.isPinned,
+            isStarred = entity.isStarred,
+            status = statusEnum,
+            sentAt = entity.sentAt,
+            deliveredAt = entity.deliveredAt,
+            readAt = entity.readAt,
+            listenedAt = entity.listenedAt,
+        )
+    }
+
     private fun startObservingLocalMessages(ownerUsername: String, chatId: String) {
         localMessagesJob?.cancel()
         localMessagesJob = scope.launch {
             mothDao.observeMessages(ownerUsername, chatId).collect { entities ->
-                activeMessages = entities.map { entity ->
-                    val type = try { MessageType.valueOf(entity.type) } catch (_: Exception) { MessageType.REGULAR }
-                    val voStatus = try { ViewOnceStatus.valueOf(entity.viewOnceStatus) } catch (_: Exception) { ViewOnceStatus.UNOPENED }
-                    val attType = entity.attachmentType?.let {
-                        try { AttachmentType.valueOf(it) } catch (_: Exception) { null }
-                    }
-                    val statusEnum = try { MessageStatus.valueOf(entity.status) } catch (_: Exception) { MessageStatus.SENT }
-                    val reactionsMap = parseReactionsJson(entity.reactionsJson)
-                    val (count, hasMine) = if (reactionsMap.isNotEmpty()) {
-                        computeReactionSummary(reactionsMap, ownerUsername)
-                    } else {
-                        entity.reactionCount to entity.hasReacted
-                    }
-
-                    MothMessage(
-                        id = entity.id,
-                        senderUsername = entity.senderUsername,
-                        text = entity.text,
-                        isMine = entity.senderUsername.equals(ownerUsername, ignoreCase = true),
-                        type = type,
-                        reactionCount = count,
-                        hasReacted = hasMine,
-                        reactions = reactionsMap,
-                        viewOnceStatus = voStatus,
-                        embersRemaining = entity.embersRemaining,
-                        leaveTrace = entity.leaveTrace,
-                        burnStartAt = entity.burnStartAt,
-                        time = entity.time,
-                        attachmentType = attType,
-                        attachmentName = entity.attachmentName,
-                        attachmentLocalPath = entity.attachmentLocalPath,
-                        attachmentMimeType = entity.attachmentMimeType,
-                        attachmentSizeBytes = entity.attachmentSizeBytes,
-                        audioDurationSec = entity.audioDurationSec,
-                        replyToId = entity.replyToId,
-                        replyToSender = entity.replyToSender,
-                        replyToPreview = entity.replyToPreview,
-                        isForwarded = entity.isForwarded,
-                        isEdited = entity.isEdited,
-                        isDeleted = entity.isDeleted,
-                        isPinned = entity.isPinned,
-                        status = statusEnum,
-                        sentAt = entity.sentAt,
-                        deliveredAt = entity.deliveredAt,
-                        readAt = entity.readAt,
-                    )
-                }
+                activeMessages = entities.map { entity -> mapMessageEntity(entity, ownerUsername) }
             }
         }
     }
@@ -1912,6 +2333,46 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         }
     }
 
+    suspend fun prepareMediaAttachment(uri: Uri): Result<PendingAttachment> = withContext(Dispatchers.IO) {
+        val mime = appContext.contentResolver.getType(uri).orEmpty()
+        val rawName = queryDisplayName(uri) ?: ""
+        val isVideo = mime.startsWith("video/") ||
+            rawName.endsWith(".mp4", true) ||
+            rawName.endsWith(".mov", true) ||
+            rawName.endsWith(".webm", true) ||
+            rawName.endsWith(".mkv", true)
+        if (!isVideo) {
+            return@withContext preparePhotoAttachment(uri)
+        }
+        try {
+            val fileName = sanitizeFilename(
+                if (rawName.isNotBlank()) rawName else "video_${System.currentTimeMillis()}.mp4"
+            )
+            val bytes = appContext.contentResolver.openInputStream(uri)?.use { it.readBytes() }
+                ?: return@withContext Result.failure(IllegalArgumentException("Unable to read video"))
+            if (bytes.size > MAX_RELAY_ATTACHMENT_BYTES) {
+                return@withContext Result.failure(
+                    IllegalArgumentException("Video too large (${bytes.size / 1024} KB). Max 600 KB for relay.")
+                )
+            }
+            val destFile = File(mediaDir, "sent_${System.currentTimeMillis()}_$fileName")
+            destFile.writeBytes(bytes)
+            val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+            Result.success(
+                PendingAttachment(
+                    type = AttachmentType.VIDEO,
+                    name = fileName,
+                    localPath = destFile.absolutePath,
+                    mimeType = if (mime.startsWith("video/")) mime else "video/mp4",
+                    sizeBytes = bytes.size.toLong(),
+                    base64Data = base64,
+                )
+            )
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
     suspend fun prepareFileAttachment(uri: Uri): Result<PendingAttachment> = withContext(Dispatchers.IO) {
         try {
             val mime = appContext.contentResolver.getType(uri) ?: "application/octet-stream"
@@ -1998,19 +2459,38 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         }
     }
 
+    fun resolveUriDisplayName(uri: Uri): String = queryDisplayName(uri) ?: "sticker"
+
     suspend fun createPhotoSticker(uri: Uri): Result<MothSticker> = withContext(Dispatchers.IO) {
-        val owner = currentUsername
-        if (owner.isBlank()) return@withContext Result.failure(IllegalStateException("Not logged in"))
         try {
-            val original = appContext.contentResolver.openInputStream(uri)?.use {
-                BitmapFactory.decodeStream(it)
-            } ?: return@withContext Result.failure(IllegalArgumentException("Unable to read image"))
+            val original = decodeOrientedBitmap(appContext, uri, maxDim = 1200)
+                ?: return@withContext Result.failure(IllegalArgumentException("Unable to read image"))
 
             val side = minOf(original.width, original.height)
             val xOff = (original.width - side) / 2
             val yOff = (original.height - side) / 2
             val cropped = Bitmap.createBitmap(original, xOff, yOff, side, side)
-            val scaled = if (side > 320) Bitmap.createScaledBitmap(cropped, 320, 320, true) else cropped
+            if (cropped !== original) original.recycle()
+
+            val rawName = queryDisplayName(uri) ?: "sticker"
+            val cleanLabel = rawName.substringBeforeLast('.').take(24).ifBlank { "sticker" }
+            try {
+                createPhotoStickerBitmap(cropped, cleanLabel)
+            } finally {
+                if (!cropped.isRecycled) cropped.recycle()
+            }
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun createPhotoStickerBitmap(bitmap: Bitmap, label: String): Result<MothSticker> = withContext(Dispatchers.IO) {
+        val owner = currentUsername
+        if (owner.isBlank()) return@withContext Result.failure(IllegalStateException("Not logged in"))
+        try {
+            val scaled = if (bitmap.width > 320 || bitmap.height > 320) {
+                Bitmap.createScaledBitmap(bitmap, 320, 320, true)
+            } else bitmap
 
             val outStream = ByteArrayOutputStream()
             var quality = 85
@@ -2025,12 +2505,9 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                 }
             }
 
-            if (scaled !== cropped) scaled.recycle()
-            if (cropped !== original) cropped.recycle()
-            original.recycle()
+            if (scaled !== bitmap) scaled.recycle()
 
-            val rawName = queryDisplayName(uri) ?: "sticker"
-            val cleanLabel = rawName.substringBeforeLast('.').take(24).ifBlank { "sticker" }
+            val cleanLabel = label.trim().take(24).ifBlank { "sticker" }
             val id = "stk_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(4)}"
             val file = File(mediaDir, "${id}.png")
             val bytes = outStream.toByteArray()
@@ -2045,6 +2522,142 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
             mothDao.upsertSticker(entity)
             ioScope.launch { syncStickerToCloud(entity, bytes) }
             Result.success(MothSticker(id = id, label = cleanLabel, imageLocalPath = file.absolutePath))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun favoriteStickerFromMessage(message: MothMessage): Result<MothSticker> = withContext(Dispatchers.IO) {
+        val owner = currentUsername
+        if (owner.isBlank()) return@withContext Result.failure(IllegalStateException("Not logged in"))
+        if (message.attachmentType != AttachmentType.STICKER) {
+            return@withContext Result.failure(IllegalArgumentException("Message is not a sticker"))
+        }
+        val path = message.attachmentLocalPath
+            ?: return@withContext Result.failure(IllegalArgumentException("Sticker file unavailable"))
+        val srcFile = File(path)
+        if (!srcFile.exists()) {
+            return@withContext Result.failure(IllegalArgumentException("Sticker file missing"))
+        }
+        try {
+            val bytes = srcFile.readBytes()
+            val digest = MessageDigest.getInstance("SHA-256").digest(bytes)
+            val existing = mothDao.getStickersOnce(owner).firstOrNull { stk ->
+                val f = File(stk.imageLocalPath)
+                f.exists() && MessageDigest.getInstance("SHA-256").digest(f.readBytes()).contentEquals(digest)
+            }
+            if (existing != null) {
+                return@withContext Result.success(
+                    MothSticker(id = existing.id, label = existing.label, imageLocalPath = existing.imageLocalPath)
+                )
+            }
+
+            val rawLabel = message.attachmentName?.substringBeforeLast('.')?.trim().orEmpty()
+            val cleanLabel = rawLabel.ifBlank { "${message.senderUsername}_stk" }.take(24)
+            val id = "stk_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(4)}"
+            val destFile = File(mediaDir, "${id}.png")
+            destFile.writeBytes(bytes)
+
+            val entity = MothStickerEntity(
+                id = id,
+                ownerUsername = owner,
+                label = cleanLabel,
+                imageLocalPath = destFile.absolutePath,
+            )
+            mothDao.upsertSticker(entity)
+            ioScope.launch { syncStickerToCloud(entity, bytes) }
+            Result.success(MothSticker(id = id, label = cleanLabel, imageLocalPath = destFile.absolutePath))
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun saveMediaToDevice(
+        localPath: String,
+        attachmentType: AttachmentType?,
+        mimeType: String?,
+        fileName: String?,
+    ): Result<String> = withContext(Dispatchers.IO) {
+        val srcFile = File(localPath)
+        if (!srcFile.exists()) {
+            return@withContext Result.failure(IllegalArgumentException("Media file not found on device"))
+        }
+        val resolvedType = attachmentType ?: when {
+            srcFile.name.endsWith(".mp4", true) || srcFile.name.endsWith(".mov", true) -> AttachmentType.VIDEO
+            srcFile.name.endsWith(".m4a", true) || srcFile.name.endsWith(".mp3", true) -> AttachmentType.VOICE
+            else -> AttachmentType.PHOTO
+        }
+        val fallbackExt = when (resolvedType) {
+            AttachmentType.VIDEO -> "mp4"
+            AttachmentType.VOICE -> "m4a"
+            AttachmentType.STICKER -> "png"
+            AttachmentType.PHOTO -> "jpg"
+            AttachmentType.FILE -> "bin"
+        }
+        val safeName = sanitizeFilename(
+            fileName?.takeIf { it.isNotBlank() } ?: "farlight_${System.currentTimeMillis()}.$fallbackExt"
+        ).let { base ->
+            if (base.contains('.')) base else "$base.$fallbackExt"
+        }
+        val resolvedMime = mimeType?.takeIf { it.isNotBlank() && it != "*/*" } ?: when (resolvedType) {
+            AttachmentType.VIDEO -> "video/mp4"
+            AttachmentType.VOICE -> "audio/mp4"
+            AttachmentType.STICKER -> "image/png"
+            AttachmentType.PHOTO -> "image/jpeg"
+            AttachmentType.FILE -> "application/octet-stream"
+        }
+
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
+            return@withContext Result.failure(SafExportRequiredException(safeName, resolvedMime))
+        }
+
+        try {
+            val resolver = appContext.contentResolver
+            val (collectionUri, relDir) = when (resolvedType) {
+                AttachmentType.PHOTO, AttachmentType.STICKER ->
+                    MediaStore.Images.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY) to
+                        "${Environment.DIRECTORY_PICTURES}/Farlight"
+                AttachmentType.VIDEO ->
+                    MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY) to
+                        "${Environment.DIRECTORY_MOVIES}/Farlight"
+                AttachmentType.VOICE, AttachmentType.FILE ->
+                    MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY) to
+                        "${Environment.DIRECTORY_DOWNLOADS}/Farlight"
+            }
+            val values = ContentValues().apply {
+                put(MediaStore.MediaColumns.DISPLAY_NAME, safeName)
+                put(MediaStore.MediaColumns.MIME_TYPE, resolvedMime)
+                put(MediaStore.MediaColumns.RELATIVE_PATH, relDir)
+                put(MediaStore.MediaColumns.IS_PENDING, 1)
+            }
+            val itemUri = resolver.insert(collectionUri, values)
+                ?: return@withContext Result.failure(IllegalStateException("Unable to create media entry"))
+            try {
+                resolver.openOutputStream(itemUri)?.use { out ->
+                    srcFile.inputStream().use { input -> input.copyTo(out) }
+                } ?: throw IllegalStateException("Unable to write to storage")
+                val doneValues = ContentValues().apply {
+                    put(MediaStore.MediaColumns.IS_PENDING, 0)
+                }
+                resolver.update(itemUri, doneValues, null, null)
+            } catch (e: Exception) {
+                try { resolver.delete(itemUri, null, null) } catch (_: Exception) {}
+                throw e
+            }
+            Result.success("saved to $relDir/$safeName")
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun writeLocalFileToUri(localPath: String, destUri: Uri): Result<Unit> = withContext(Dispatchers.IO) {
+        try {
+            val src = File(localPath)
+            if (!src.exists()) return@withContext Result.failure(IllegalArgumentException("Source file missing"))
+            appContext.contentResolver.openOutputStream(destUri)?.use { out ->
+                src.inputStream().use { input -> input.copyTo(out) }
+            } ?: return@withContext Result.failure(IllegalStateException("Unable to open destination"))
+            Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
         }
@@ -2181,14 +2794,16 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         val replyPreview = replyTo?.let {
             if (it.text.isNotBlank()) it.text.take(60)
             else when (it.attachmentType) {
-                AttachmentType.PHOTO -> "📷 photo"
-                AttachmentType.VOICE -> "🎤 voice note"
-                AttachmentType.STICKER -> "✦ sticker"
-                AttachmentType.FILE -> "📎 ${it.attachmentName ?: "file"}"
+                AttachmentType.PHOTO -> "photo"
+                AttachmentType.VIDEO -> "video"
+                AttachmentType.VOICE -> "voice note"
+                AttachmentType.STICKER -> "sticker"
+                AttachmentType.FILE -> it.attachmentName ?: "file"
                 null -> "message"
             }
         }
 
+        ensureBurnMonitorRunning()
         ioScope.launch {
             try {
                 val chatEntity = mothDao.getChat(chatId)
@@ -2541,6 +3156,111 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         }
     }
 
+    fun toggleStarMessage(chatId: String, messageId: String) {
+        val owner = currentUsername
+        if (owner.isBlank()) return
+        ioScope.launch {
+            val localId = localMsgIdFor(owner, messageId)
+            val msg = mothDao.getMessage(localId) ?: return@launch
+            if (msg.isDeleted) return@launch
+            mothDao.updateMessageStarred(localId, !msg.isStarred)
+        }
+    }
+
+    fun setMessagesStarred(chatId: String, messageIds: Collection<String>, starred: Boolean) {
+        val owner = currentUsername
+        if (owner.isBlank() || messageIds.isEmpty()) return
+        ioScope.launch {
+            for (msgId in messageIds) {
+                val localId = localMsgIdFor(owner, msgId)
+                val msg = mothDao.getMessage(localId) ?: continue
+                if (!msg.isDeleted) {
+                    mothDao.updateMessageStarred(localId, starred)
+                }
+            }
+        }
+    }
+
+    fun markVoiceNoteListened(chatId: String, message: MothMessage) {
+        val owner = currentUsername
+        if (owner.isBlank() || message.attachmentType != AttachmentType.VOICE || message.isMine) return
+        if (message.listenedAt > 0L) return
+        val now = System.currentTimeMillis()
+        ioScope.launch {
+            val localId = localMsgIdFor(owner, message.id)
+            val existing = mothDao.getMessage(localId) ?: return@launch
+            if (existing.listenedAt > 0L) return@launch
+            mothDao.updateMessageListened(localId, now)
+
+            val sender = message.senderUsername.trim().lowercase()
+            if (!disableReadReceipts && sender.isNotBlank() && sender != "support" && sender != owner) {
+                try {
+                    val docId = "vlisten_${message.id}_${sender}_${now}"
+                    db.collection("relay_messages").document(docId).set(
+                        mapOf(
+                            "relayKind" to "VOICE_LISTENED",
+                            "senderUsername" to owner,
+                            "recipientUsername" to sender,
+                            "targetMsgId" to message.id,
+                            "listenedAt" to now,
+                        )
+                    ).await()
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
+    fun togglePinChat(chatId: String) {
+        val owner = currentUsername
+        if (owner.isBlank()) return
+        ioScope.launch {
+            val chat = mothDao.getChat(chatId) ?: return@launch
+            val nextPinned = !chat.isPinned
+            mothDao.updateChatPinned(chatId, nextPinned)
+            syncChatToCloud(chat.copy(isPinned = nextPinned))
+        }
+    }
+
+    fun toggleMuteChat(chatId: String) {
+        val owner = currentUsername
+        if (owner.isBlank()) return
+        ioScope.launch {
+            val chat = mothDao.getChat(chatId) ?: return@launch
+            val nextMuted = !chat.isMuted
+            mothDao.updateChatMuted(chatId, nextMuted)
+            syncChatToCloud(chat.copy(isMuted = nextMuted))
+        }
+    }
+
+    fun deleteChatConversation(chatId: String) {
+        val owner = currentUsername
+        if (owner.isBlank()) return
+        ioScope.launch {
+            val chat = mothDao.getChat(chatId)
+            val messages = mothDao.getMessagesByChatOnce(owner, chatId)
+            for (m in messages) {
+                val path = m.attachmentLocalPath
+                if (!path.isNullOrBlank()) {
+                    try {
+                        val f = File(path)
+                        if (f.exists() && f.absolutePath.startsWith(mediaDir.absolutePath)) f.delete()
+                    } catch (_: Exception) {}
+                }
+            }
+            mothDao.deleteMessagesByChat(owner, chatId)
+            mothDao.deleteChat(chatId)
+            if (activeChatId == chatId) {
+                withContext(Dispatchers.Main) { activeChatId = null }
+            }
+            if (chat != null) {
+                val docKey = if (chat.isGroup) chat.id.substringAfter("::") else chat.otherUsername
+                try {
+                    db.collection("users").document(owner).collection("chats").document(docKey).delete().await()
+                } catch (_: Exception) {}
+            }
+        }
+    }
+
     fun reactToMessage(chatId: String, messageId: String, emoji: String) {
         val owner = currentUsername
         if (owner.isBlank()) return
@@ -2637,25 +3357,52 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         }
     }
 
-    fun revealViewOnce(chatId: String, messageId: String) {
+    private suspend fun burnLocalViewOnceAndCleanup(owner: String, messageId: String) {
+        val localId = localMsgIdFor(owner, messageId)
+        val msg = mothDao.getMessage(localId) ?: return
+        if (!msg.attachmentLocalPath.isNullOrBlank()) {
+            try {
+                val file = File(msg.attachmentLocalPath)
+                if (file.exists() && file.absolutePath.startsWith(mediaDir.absolutePath)) file.delete()
+            } catch (_: Exception) {}
+        }
+        mothDao.burnViewOnceMessage(localId)
+        val chat = mothDao.getChat(msg.chatId)
+        val latest = mothDao.getLatestMessage(owner, msg.chatId)
+        if (chat != null && latest?.localId == localId) {
+            val updatedChat = chat.copy(preview = "view once opened", isViewOnce = false)
+            mothDao.upsertChat(updatedChat)
+            syncChatToCloud(updatedChat)
+        }
+    }
+
+    fun markViewOnceOpenedAndBurn(chatId: String, messageId: String) {
         val owner = currentUsername
         if (owner.isBlank()) return
         ioScope.launch {
             val localId = localMsgIdFor(owner, messageId)
             val msg = mothDao.getMessage(localId) ?: return@launch
-            val current = try { ViewOnceStatus.valueOf(msg.viewOnceStatus) } catch (_: Exception) { ViewOnceStatus.UNOPENED }
-            when (current) {
-                ViewOnceStatus.UNOPENED -> mothDao.updateViewOnceStatus(localId, ViewOnceStatus.REVEALED.name)
-                ViewOnceStatus.REVEALED -> {
-                    if (!msg.attachmentLocalPath.isNullOrBlank()) {
-                        try {
-                            val file = File(msg.attachmentLocalPath)
-                            if (file.exists() && file.absolutePath.startsWith(mediaDir.absolutePath)) file.delete()
-                        } catch (_: Exception) {}
-                    }
-                    mothDao.burnViewOnceMessage(localId)
-                }
-                ViewOnceStatus.BURNED -> Unit
+            if (msg.senderUsername.equals(owner, ignoreCase = true)) return@launch
+            burnLocalViewOnceAndCleanup(owner, messageId)
+
+            val chat = mothDao.getChat(chatId) ?: return@launch
+            val groupId = if (chat.isGroup) chat.id.substringAfter("::") else null
+            val recipients = if (chat.isGroup) {
+                jsonArrayToList(chat.membersJson).filter { !it.equals(owner, ignoreCase = true) }
+            } else if (chat.otherUsername != "support") {
+                listOf(chat.otherUsername)
+            } else emptyList()
+
+            for (recipient in recipients) {
+                val docId = "vo_${messageId}_${recipient}_${System.currentTimeMillis()}"
+                val payload = hashMapOf<String, Any>(
+                    "relayKind" to "VIEW_ONCE_OPENED",
+                    "targetMsgId" to messageId,
+                    "senderUsername" to owner,
+                    "recipientUsername" to recipient,
+                )
+                if (groupId != null) payload["groupId"] = groupId
+                try { db.collection("relay_messages").document(docId).set(payload).await() } catch (_: Exception) {}
             }
         }
     }
@@ -2684,27 +3431,22 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
 
         scope.launch {
             try {
-                val userDoc = withContext(Dispatchers.IO) {
-                    db.collection("users").document(cleanName).get().await()
-                }
-                if (!userDoc.exists()) {
-                    onError("User '$cleanName' does not exist in the database")
-                    return@launch
-                }
-
-                userDoc.getString("e2eePublicKey")?.let { crypto.cachePeerPublicKey(cleanName, it) }
-                val remoteColor = userDoc.getLong("avatarColorArgb")
-                    ?: avatarColorForUsername(cleanName).toArgb().toLong()
-                val remoteAvatarBase64 = userDoc.getString("avatarBase64")
+                var remoteColor = avatarColorForUsername(cleanName).toArgb().toLong()
                 var savedAvatarPath: String? = null
-                if (!remoteAvatarBase64.isNullOrBlank()) {
-                    withContext(Dispatchers.IO) {
-                        try {
-                            val file = File(mediaDir, "contact_avatar_${cleanName}.jpg")
-                            file.writeBytes(Base64.decode(remoteAvatarBase64, Base64.NO_WRAP))
-                            savedAvatarPath = file.absolutePath
-                        } catch (_: Exception) {}
-                    }
+                withContext(Dispatchers.IO) {
+                    try {
+                        val userDoc = db.collection("users").document(cleanName).get().await()
+                        if (userDoc.exists()) {
+                            userDoc.getString("e2eePublicKey")?.let { crypto.cachePeerPublicKey(cleanName, it) }
+                            userDoc.getLong("avatarColorArgb")?.let { remoteColor = it }
+                            val remoteAvatarBase64 = userDoc.getString("avatarBase64")
+                            if (!remoteAvatarBase64.isNullOrBlank()) {
+                                val file = File(mediaDir, "contact_avatar_${cleanName}.jpg")
+                                file.writeBytes(Base64.decode(remoteAvatarBase64, Base64.NO_WRAP))
+                                savedAvatarPath = file.absolutePath
+                            }
+                        }
+                    } catch (_: Exception) {}
                 }
 
                 val chatId = chatIdFor(owner, cleanName)
@@ -2713,22 +3455,20 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
 
                 withContext(Dispatchers.IO) {
                     val existing = mothDao.getChat(chatId)
-                    if (existing == null) {
-                        val newChat = MothChatEntity(
-                            id = chatId,
-                            ownerUsername = owner,
-                            otherUsername = cleanName,
-                            preview = initialMessage.trim().ifBlank { "lantern lit" },
-                            time = timeStr,
-                            avatarColorArgb = remoteColor,
-                            avatarLocalPath = savedAvatarPath,
-                            unreadCount = 0,
-                            isLit = true,
-                            updatedAt = now,
-                        )
-                        mothDao.upsertChat(newChat)
-                        syncChatToCloud(newChat)
-                    }
+                    val newChat = MothChatEntity(
+                        id = chatId,
+                        ownerUsername = owner,
+                        otherUsername = cleanName,
+                        preview = initialMessage.trim().ifBlank { "lantern lit" },
+                        time = timeStr,
+                        avatarColorArgb = remoteColor,
+                        avatarLocalPath = savedAvatarPath ?: existing?.avatarLocalPath,
+                        unreadCount = 0,
+                        isLit = true,
+                        updatedAt = now,
+                    )
+                    mothDao.upsertChat(newChat)
+                    syncChatToCloud(newChat)
                 }
 
                 openConversation(chatId)
@@ -3053,10 +3793,13 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                 callTimerJob?.cancel()
                 callTimerJob = scope.launch {
                     while (isActive && activeCall?.callId == callId) {
-                        if (webRtcManager.connectionState == "connected" && activeCall?.status != "ACTIVE") {
+                        val rtcConn = webRtcManager.connectionState
+                        if (rtcConn == "connected" && activeCall?.status != "ACTIVE") {
                             activeCall = activeCall?.copy(status = "ACTIVE", startedAtMs = System.currentTimeMillis())
+                        } else if (rtcConn == "connecting" && activeCall?.status == "RINGING") {
+                            activeCall = activeCall?.copy(status = "CONNECTING")
                         }
-                        delay(500L)
+                        delay(300L)
                     }
                 }
             } catch (e: Exception) {
@@ -3069,12 +3812,28 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
     fun acceptIncomingCall() {
         val call = activeCall ?: return
         if (call.isCaller || call.offerSdp.isNullOrBlank()) return
-        activeCall = call.copy(status = "ACTIVE", startedAtMs = System.currentTimeMillis())
+        val callId = call.callId
+        activeCall = call.copy(status = "CONNECTING", startedAtMs = 0L)
         webRtcManager.acceptCalleeSession(
-            callId = call.callId,
+            callId = callId,
             offerSdp = call.offerSdp,
-            onRemoteHangup = { scope.launch(Dispatchers.Main) { finishCallLocally(wasAnswered = true) } }
+            onRemoteHangup = {
+                scope.launch(Dispatchers.Main) {
+                    finishCallLocally(
+                        wasAnswered = webRtcManager.connectionState == "connected" || activeCall?.status == "ACTIVE"
+                    )
+                }
+            }
         )
+        callTimerJob?.cancel()
+        callTimerJob = scope.launch {
+            while (isActive && activeCall?.callId == callId) {
+                if (webRtcManager.connectionState == "connected" && activeCall?.status != "ACTIVE") {
+                    activeCall = activeCall?.copy(status = "ACTIVE", startedAtMs = System.currentTimeMillis())
+                }
+                delay(300L)
+            }
+        }
     }
 
     fun declineOrEndCall() {
@@ -3217,12 +3976,13 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
     ): String {
         val core = when {
             type == MessageType.VIEW_ONCE -> "view once"
-            type == MessageType.DISAPPEARING -> "🔥 burning message"
-            type == MessageType.BURNED_TRACE -> "✦ message burned"
-            attachmentType == AttachmentType.STICKER.name -> "✦ sticker"
-            attachmentType == AttachmentType.VOICE.name -> "🎤 voice note"
-            attachmentType == AttachmentType.PHOTO.name -> if (text.isNotBlank()) "📷 $text" else "📷 photo"
-            attachmentType == AttachmentType.FILE.name -> if (text.isNotBlank()) "📎 $text" else "📎 ${attachmentName ?: "file"}"
+            type == MessageType.DISAPPEARING -> "burning message"
+            type == MessageType.BURNED_TRACE -> "message burned"
+            attachmentType == AttachmentType.STICKER.name -> "sticker"
+            attachmentType == AttachmentType.VOICE.name -> "voice note"
+            attachmentType == AttachmentType.VIDEO.name -> if (text.isNotBlank()) "video: $text" else "video"
+            attachmentType == AttachmentType.PHOTO.name -> if (text.isNotBlank()) "photo: $text" else "photo"
+            attachmentType == AttachmentType.FILE.name -> if (text.isNotBlank()) "file: $text" else (attachmentName ?: "file")
             else -> text
         }
         return "$senderPrefix$core"
@@ -3238,8 +3998,9 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         if (type == MessageType.DISAPPEARING) return "sent a burning message"
         if (attachmentType == AttachmentType.STICKER.name) return "sent a sticker"
         if (attachmentType == AttachmentType.VOICE.name) return "sent a voice note"
-        if (attachmentType == AttachmentType.PHOTO.name) return if (text.isNotBlank()) "📷 $text" else "sent a photo"
-        if (attachmentType == AttachmentType.FILE.name) return if (text.isNotBlank()) "📎 $text" else "sent a file: ${attachmentName ?: "attachment"}"
+        if (attachmentType == AttachmentType.VIDEO.name) return if (text.isNotBlank()) "video: $text" else "sent a video"
+        if (attachmentType == AttachmentType.PHOTO.name) return if (text.isNotBlank()) "photo: $text" else "sent a photo"
+        if (attachmentType == AttachmentType.FILE.name) return if (text.isNotBlank()) "file: $text" else "sent a file: ${attachmentName ?: "attachment"}"
         return text
     }
 
@@ -3287,12 +4048,18 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         private const val KEY_LOGGED_IN_USER = "logged_in_username"
         private const val KEY_AVATAR_COLOR = "user_avatar_color"
         private const val KEY_AVATAR_PATH = "user_avatar_path"
+        private const val KEY_USER_BIO = "user_bio"
+        private const val KEY_CUSTOM_REACTIONS = "custom_reaction_emojis"
+        private val DEFAULT_REACTIONS = listOf("❤️", "🔥", "😂", "😮", "😢", "👍", "✨")
         private const val KEY_SCREENSHOT_BLOCK = "pref_screenshot_blocking"
         private const val KEY_HIDE_TYPING = "pref_hide_typing"
         private const val KEY_DISABLE_READ_RECEIPTS = "pref_disable_read_receipts"
         private const val KEY_FONT_SCALE = "pref_font_scale"
         private const val KEY_APP_LOCK_ENABLED = "pref_app_lock_enabled"
         private const val KEY_APP_LOCK_PIN_HASH = "pref_app_lock_pin_hash"
+        private const val KEY_MSG_NOTIF = "pref_msg_notifications"
+        private const val KEY_CALL_NOTIF = "pref_call_notifications"
+        private const val KEY_NOTIF_PREVIEW = "pref_notif_previews"
         private const val NOTIF_CHANNEL_ID = "moth_messages"
         private const val BURN_STEP_MS = 1500L
         private const val BURN_DURATION_MS = 10 * BURN_STEP_MS

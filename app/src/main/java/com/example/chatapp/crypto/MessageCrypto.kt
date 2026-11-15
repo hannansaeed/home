@@ -68,6 +68,21 @@ class EcdhAesGcmCrypto @Inject constructor(
         return Base64.encodeToString(myKeyPair!!.public.encoded, Base64.NO_WRAP)
     }
 
+    fun copyUserKeyPairForRename(oldUsername: String, newUsername: String) {
+        val oldClean = oldUsername.trim().lowercase()
+        val newClean = newUsername.trim().lowercase()
+        if (oldClean.isBlank() || newClean.isBlank() || oldClean == newClean) return
+        val pubB64 = prefs.getString("pub_$oldClean", null)
+        val wrappedPrivB64 = prefs.getString("priv_wrapped_$oldClean", null)
+        if (!pubB64.isNullOrBlank() && !wrappedPrivB64.isNullOrBlank()) {
+            prefs.edit()
+                .putString("pub_$newClean", pubB64)
+                .putString("priv_wrapped_$newClean", wrappedPrivB64)
+                .apply()
+            activeUsername = newClean
+        }
+    }
+
     fun getPublicKeyBase64(): String {
         val kp = myKeyPair ?: return ""
         return Base64.encodeToString(kp.public.encoded, Base64.NO_WRAP)
@@ -89,6 +104,12 @@ class EcdhAesGcmCrypto @Inject constructor(
 
     fun hasPeerPublicKey(peerId: String): Boolean {
         return peerPublicKeys.containsKey(peerId.trim().lowercase())
+    }
+
+    fun getPeerFingerprint(peerId: String): String? {
+        val pub = peerPublicKeys[peerId.trim().lowercase()] ?: return null
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(pub.encoded)
+        return digest.take(8).joinToString(" ") { "%02X".format(it) }
     }
 
     override suspend fun encrypt(recipientId: String, plaintext: ByteArray): ByteArray {

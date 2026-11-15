@@ -1,9 +1,11 @@
 package com.example.chatapp.ui.chatlist
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -24,11 +26,14 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.chatapp.ui.calls.CallHistoryEmptyPage
 import com.example.chatapp.ui.components.*
 import com.example.chatapp.ui.moth.*
 import com.example.chatapp.ui.theme.*
+import kotlinx.coroutines.launch
 
 @Composable
 fun ChatListScreen(
@@ -36,11 +41,14 @@ fun ChatListScreen(
     onOpenChat: (title: String) -> Unit,
     onSignOut: () -> Unit = {},
 ) {
+    val coroutineScope = rememberCoroutineScope()
     var activeTab by remember { mutableStateOf("chats") }
     var showSearch by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var showNewChatDialog by remember { mutableStateOf(false) }
     var showOptionsMenu by remember { mutableStateOf(false) }
+    var showStarredModal by remember { mutableStateOf(false) }
+    var holdChatTarget by remember { mutableStateOf<MothConversation?>(null) }
 
     var newContactName by remember { mutableStateOf("") }
     var newContactInitialMsg by remember { mutableStateOf("") }
@@ -109,151 +117,204 @@ fun ChatListScreen(
                     )
                 }
 
-                // Right: Search icon + Options menu button (containing + button inside)
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(40.dp)
-                            .clickable {
-                                showSearch = !showSearch
-                                if (!showSearch) searchQuery = ""
-                            }
-                            .testTag("search_icon"),
-                        contentAlignment = Alignment.Center,
+                // Right: Search icon + Options menu (ONLY on Chats and Calls tabs)
+                if (activeTab == "chats" || activeTab == "calls") {
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
-                        PixelSearchIcon(
-                            tint = if (showSearch) TheirBubbleText else LanternAmber,
-                            modifier = Modifier.size(20.dp),
-                        )
-                    }
-
-                    // Options button (three vertical dots ⋮) with dropdown containing + new lantern action
-                    Box {
-                        Text(
-                            text = "⋮",
-                            fontSize = 22.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = LanternAmber,
+                        Box(
                             modifier = Modifier
-                                .clickable { showOptionsMenu = !showOptionsMenu }
-                                .padding(horizontal = 4.dp)
-                                .testTag("options_button"),
-                        )
-
-                        DropdownMenu(
-                            expanded = showOptionsMenu,
-                            onDismissRequest = { showOptionsMenu = false },
-                            modifier = Modifier
-                                .background(MothHeaderBg)
-                                .border(2.dp, TheirBubbleBorder),
+                                .size(40.dp)
+                                .clickable {
+                                    showSearch = !showSearch
+                                    if (!showSearch) searchQuery = ""
+                                }
+                                .testTag("search_icon"),
+                            contentAlignment = Alignment.Center,
                         ) {
-                            DropdownMenuItem(
-                                text = {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    ) {
-                                        Text(
-                                            text = "+",
-                                            fontFamily = PixelifySans,
-                                            fontSize = 18.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = LanternAmber,
-                                        )
-                                        Text(
-                                            text = "new lantern / chat",
-                                            fontFamily = PixelifySans,
-                                            fontSize = 13.sp,
-                                            color = TheirBubbleText,
-                                        )
-                                    }
-                                },
-                                onClick = {
-                                    showOptionsMenu = false
-                                    showNewChatDialog = true
-                                },
-                                modifier = Modifier.testTag("menu_new_chat_button"),
+                            PixelSearchIcon(
+                                tint = if (showSearch) TheirBubbleText else LanternAmber,
+                                modifier = Modifier.size(20.dp),
+                            )
+                        }
+
+                        // Options button (three vertical dots ⋮)
+                        Box {
+                            Text(
+                                text = "⋮",
+                                fontSize = 22.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = LanternAmber,
+                                modifier = Modifier
+                                    .clickable { showOptionsMenu = !showOptionsMenu }
+                                    .padding(horizontal = 4.dp)
+                                    .testTag("options_button"),
                             )
 
-                            DropdownMenuItem(
-                                text = {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    ) {
-                                        PixelLantern(
-                                            isLit = true,
-                                            modifier = Modifier.size(16.dp, 19.dp),
-                                        )
-                                        Text(
-                                            text = "new group lantern",
-                                            fontFamily = PixelifySans,
-                                            fontSize = 13.sp,
-                                            color = TheirBubbleText,
-                                        )
-                                    }
-                                },
-                                onClick = {
-                                    showOptionsMenu = false
-                                    showNewGroupDialog = true
-                                },
-                                modifier = Modifier.testTag("menu_new_group_button"),
-                            )
+                            DropdownMenu(
+                                expanded = showOptionsMenu,
+                                onDismissRequest = { showOptionsMenu = false },
+                                modifier = Modifier
+                                    .background(MothHeaderBg)
+                                    .border(2.dp, TheirBubbleBorder),
+                            ) {
+                                if (activeTab == "calls") {
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            ) {
+                                                PixelTrashIcon(
+                                                    tint = WaxSealRed,
+                                                    modifier = Modifier.size(16.dp),
+                                                )
+                                                Text(
+                                                    text = "clear all logs",
+                                                    fontFamily = PixelifySans,
+                                                    fontSize = 13.sp,
+                                                    color = WaxSealRed,
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            showOptionsMenu = false
+                                            coroutineScope.launch { state.clearAllCallLogs() }
+                                        },
+                                        modifier = Modifier.testTag("menu_clear_all_logs"),
+                                    )
+                                } else {
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            ) {
+                                                Text(
+                                                    text = "+",
+                                                    fontFamily = PixelifySans,
+                                                    fontSize = 18.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    color = LanternAmber,
+                                                )
+                                                Text(
+                                                    text = "new lantern / chat",
+                                                    fontFamily = PixelifySans,
+                                                    fontSize = 13.sp,
+                                                    color = TheirBubbleText,
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            showOptionsMenu = false
+                                            showNewChatDialog = true
+                                        },
+                                        modifier = Modifier.testTag("menu_new_chat_button"),
+                                    )
 
-                            DropdownMenuItem(
-                                text = {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    ) {
-                                        Text(
-                                            text = "✓",
-                                            fontFamily = PixelifySans,
-                                            fontSize = 13.sp,
-                                            color = SecureGreen,
-                                        )
-                                        Text(
-                                            text = "mark all as read",
-                                            fontFamily = PixelifySans,
-                                            fontSize = 13.sp,
-                                            color = TheirBubbleText,
-                                        )
-                                    }
-                                },
-                                onClick = {
-                                    showOptionsMenu = false
-                                    state.markAllAsRead()
-                                },
-                            )
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            ) {
+                                                PixelLantern(
+                                                    isLit = true,
+                                                    modifier = Modifier.size(16.dp, 19.dp),
+                                                )
+                                                Text(
+                                                    text = "new group lantern",
+                                                    fontFamily = PixelifySans,
+                                                    fontSize = 13.sp,
+                                                    color = TheirBubbleText,
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            showOptionsMenu = false
+                                            showNewGroupDialog = true
+                                        },
+                                        modifier = Modifier.testTag("menu_new_group_button"),
+                                    )
 
-                            DropdownMenuItem(
-                                text = {
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    ) {
-                                        Text(
-                                            text = "▲",
-                                            fontFamily = PixelifySans,
-                                            fontSize = 12.sp,
-                                            color = MutedText,
-                                        )
-                                        Text(
-                                            text = "operator profile",
-                                            fontFamily = PixelifySans,
-                                            fontSize = 13.sp,
-                                            color = TheirBubbleText,
-                                        )
-                                    }
-                                },
-                                onClick = {
-                                    showOptionsMenu = false
-                                    activeTab = "me"
-                                },
-                            )
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            ) {
+                                                PixelStarIcon(
+                                                    tint = LanternAmber,
+                                                    filled = true,
+                                                    modifier = Modifier.size(15.dp),
+                                                )
+                                                Text(
+                                                    text = "starred messages",
+                                                    fontFamily = PixelifySans,
+                                                    fontSize = 13.sp,
+                                                    color = TheirBubbleText,
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            showOptionsMenu = false
+                                            showStarredModal = true
+                                        },
+                                        modifier = Modifier.testTag("menu_starred_messages_button"),
+                                    )
+
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            ) {
+                                                Text(
+                                                    text = "✓",
+                                                    fontFamily = PixelifySans,
+                                                    fontSize = 13.sp,
+                                                    color = SecureGreen,
+                                                )
+                                                Text(
+                                                    text = "mark all as read",
+                                                    fontFamily = PixelifySans,
+                                                    fontSize = 13.sp,
+                                                    color = TheirBubbleText,
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            showOptionsMenu = false
+                                            state.markAllAsRead()
+                                        },
+                                    )
+
+                                    DropdownMenuItem(
+                                        text = {
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            ) {
+                                                PixelPersonIcon(
+                                                    tint = MutedText,
+                                                    modifier = Modifier.size(16.dp),
+                                                )
+                                                Text(
+                                                    text = "operator profile",
+                                                    fontFamily = PixelifySans,
+                                                    fontSize = 13.sp,
+                                                    color = TheirBubbleText,
+                                                )
+                                            }
+                                        },
+                                        onClick = {
+                                            showOptionsMenu = false
+                                            activeTab = "me"
+                                        },
+                                    )
+                                }
+                            }
                         }
                     }
                 }
@@ -266,8 +327,8 @@ fun ChatListScreen(
                 .background(MothDivider),
         )
 
-        // Live Search Bar (stepped style)
-        AnimatedVisibility(visible = showSearch && activeTab == "chats") {
+        // Live Search Bar (stepped style, shared for Chats & Calls)
+        AnimatedVisibility(visible = showSearch && (activeTab == "chats" || activeTab == "calls")) {
             Box(
                 modifier = Modifier
                     .fillMaxWidth()
@@ -290,7 +351,7 @@ fun ChatListScreen(
                     ) {
                         if (searchQuery.isEmpty()) {
                             Text(
-                                text = "filter lanterns...",
+                                text = if (activeTab == "calls") "filter calls..." else "filter lanterns...",
                                 fontFamily = PixelifySans,
                                 fontSize = 13.sp,
                                 color = PlaceholderText,
@@ -399,6 +460,9 @@ fun ChatListScreen(
                                             state.openConversation(conv.id)
                                             onOpenChat(conv.name)
                                         },
+                                        onLongClick = {
+                                            holdChatTarget = conv
+                                        },
                                         onAvatarClick = {
                                             if (conv.isGroup) {
                                                 state.openConversation(conv.id)
@@ -422,13 +486,17 @@ fun ChatListScreen(
                 "games" -> {
                     MothMiniGameView()
                 }
-                "empty" -> {
-                    EmptyPageView(state = state)
+                "calls" -> {
+                    CallHistoryEmptyPage(state = state, searchQuery = searchQuery)
                 }
                 "me" -> {
                     MothProfileView(
                         state = state,
                         onSignOut = onSignOut,
+                        onOpenChat = { target ->
+                            state.openConversation(target)
+                            onOpenChat(target)
+                        },
                     )
                 }
             }
@@ -457,25 +525,51 @@ fun ChatListScreen(
                     label = "chats",
                     iconVector = Icons.Outlined.ChatBubbleOutline,
                     isSelected = activeTab == "chats",
-                    onClick = { activeTab = "chats" },
+                    onClick = {
+                        activeTab = "chats"
+                        showOptionsMenu = false
+                        showSearch = false
+                        searchQuery = ""
+                    },
                 )
                 TabItem(
                     label = "games",
-                    iconSymbol = "⚄",
                     isSelected = activeTab == "games",
-                    onClick = { activeTab = "games" },
+                    onClick = {
+                        activeTab = "games"
+                        showOptionsMenu = false
+                        showSearch = false
+                        searchQuery = ""
+                    },
+                    customIcon = { tint ->
+                        PixelGameIcon(tint = tint, modifier = Modifier.size(19.dp))
+                    },
                 )
                 TabItem(
-                    label = "empty",
-                    iconSymbol = "✦",
-                    isSelected = activeTab == "empty",
-                    onClick = { activeTab = "empty" },
+                    label = "calls",
+                    isSelected = activeTab == "calls",
+                    onClick = {
+                        activeTab = "calls"
+                        showOptionsMenu = false
+                        showSearch = false
+                        searchQuery = ""
+                    },
+                    customIcon = { tint ->
+                        PixelPhoneIcon(tint = tint, modifier = Modifier.size(19.dp))
+                    },
                 )
                 TabItem(
                     label = "me",
-                    iconSymbol = "▲",
                     isSelected = activeTab == "me",
-                    onClick = { activeTab = "me" },
+                    onClick = {
+                        activeTab = "me"
+                        showOptionsMenu = false
+                        showSearch = false
+                        searchQuery = ""
+                    },
+                    customIcon = { tint ->
+                        PixelPersonIcon(tint = tint, modifier = Modifier.size(19.dp))
+                    },
                 )
             }
         }
@@ -767,6 +861,15 @@ fun ChatListScreen(
                             )
                         }
 
+                        if (!details?.bio.isNullOrBlank()) {
+                            Text(
+                                text = details?.bio.orEmpty(),
+                                fontFamily = PixelifySans,
+                                fontSize = 12.sp,
+                                color = TheirBubbleText.copy(alpha = 0.85f),
+                            )
+                        }
+
                         SteppedBox(
                             modifier = Modifier.fillMaxWidth(),
                             backgroundColor = MothBgDark,
@@ -1043,6 +1146,218 @@ fun ChatListScreen(
             }
         }
     }
+
+    // Long-press Conversation Options Dialog (Pin, Mute, Delete)
+    holdChatTarget?.let { targetChat ->
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0x991A1633))
+                .clickable { holdChatTarget = null }
+                .padding(24.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            SteppedBox(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clickable(enabled = false) {}
+                    .testTag("hold_chat_dialog"),
+                backgroundColor = MothHeaderBg,
+                borderColor = LanternAmber,
+                cutSize = 4.dp,
+            ) {
+                Column(
+                    modifier = Modifier.padding(18.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Text(
+                        text = if (targetChat.isGroup) targetChat.name else "@${targetChat.name}",
+                        fontFamily = PixelifySans,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        color = LanternAmber,
+                    )
+                    SteppedButton(
+                        text = if (targetChat.isPinned) "unpin chat" else "pin chat",
+                        onClick = {
+                            state.togglePinChat(targetChat.id)
+                            holdChatTarget = null
+                        },
+                        backgroundColor = TheirBubbleFill,
+                        borderColor = TheirBubbleBorder,
+                        textColor = TheirBubbleText,
+                        modifier = Modifier.fillMaxWidth().testTag("hold_chat_pin_button"),
+                        cutSize = 3.dp,
+                    )
+                    SteppedButton(
+                        text = if (targetChat.isMuted) "unmute notifications" else "mute notifications",
+                        onClick = {
+                            state.toggleMuteChat(targetChat.id)
+                            holdChatTarget = null
+                        },
+                        backgroundColor = TheirBubbleFill,
+                        borderColor = TheirBubbleBorder,
+                        textColor = TheirBubbleText,
+                        modifier = Modifier.fillMaxWidth().testTag("hold_chat_mute_button"),
+                        cutSize = 3.dp,
+                    )
+                    SteppedButton(
+                        text = "delete chat",
+                        onClick = {
+                            state.deleteChatConversation(targetChat.id)
+                            holdChatTarget = null
+                        },
+                        backgroundColor = WaxSealRed,
+                        borderColor = WaxSealDarkEdge,
+                        textColor = Color.White,
+                        modifier = Modifier.fillMaxWidth().testTag("hold_chat_delete_button"),
+                        cutSize = 3.dp,
+                    )
+                    SteppedButton(
+                        text = "cancel",
+                        onClick = { holdChatTarget = null },
+                        backgroundColor = MothBgDark,
+                        borderColor = MothDivider,
+                        textColor = MutedText,
+                        modifier = Modifier.fillMaxWidth(),
+                        cutSize = 3.dp,
+                    )
+                }
+            }
+        }
+    }
+
+    // All Starred Messages Across All Chats Modal
+    if (showStarredModal) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Color(0x991A1633))
+                .clickable { showStarredModal = false }
+                .padding(20.dp),
+            contentAlignment = Alignment.Center,
+        ) {
+            SteppedBox(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = 500.dp)
+                    .clickable(enabled = false) {}
+                    .testTag("all_starred_messages_modal"),
+                backgroundColor = MothHeaderBg,
+                borderColor = LanternAmber,
+                cutSize = 4.dp,
+            ) {
+                Column(
+                    modifier = Modifier.padding(16.dp),
+                    verticalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            PixelStarIcon(tint = LanternAmber, filled = true, modifier = Modifier.size(16.dp))
+                            Text(
+                                text = "starred messages",
+                                fontFamily = PixelifySans,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp,
+                                color = LanternAmber,
+                            )
+                        }
+                        Text(
+                            text = "✕",
+                            fontSize = 14.sp,
+                            color = MutedText,
+                            modifier = Modifier.clickable { showStarredModal = false },
+                        )
+                    }
+
+                    if (state.allStarredMessages.isEmpty()) {
+                        Box(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 28.dp),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                text = "triple-tap any message to star it",
+                                fontFamily = PixelifySans,
+                                fontSize = 12.sp,
+                                color = MutedText,
+                            )
+                        }
+                    } else {
+                        LazyColumn(
+                            modifier = Modifier.fillMaxWidth().weight(1f, fill = false),
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            items(state.allStarredMessages, key = { "${it.chatId}_${it.message.id}" }) { entry ->
+                                val preview = entry.message.text.ifBlank {
+                                    entry.message.attachmentName
+                                        ?: (entry.message.attachmentType?.name?.lowercase() ?: "message")
+                                }
+                                SteppedBox(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .clickable {
+                                            showStarredModal = false
+                                            state.openConversation(entry.chatId)
+                                            onOpenChat(entry.chatName)
+                                        }
+                                        .testTag("starred_entry_${entry.message.id}"),
+                                    backgroundColor = MothBgDark,
+                                    borderColor = TheirBubbleBorder,
+                                    cutSize = 3.dp,
+                                    borderWidth = 1.dp,
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(10.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                    ) {
+                                        Column(modifier = Modifier.weight(1f)) {
+                                            Text(
+                                                text = "${entry.chatName} • @${entry.message.senderUsername}",
+                                                fontFamily = PixelifySans,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 11.sp,
+                                                color = LanternAmber,
+                                            )
+                                            Text(
+                                                text = preview,
+                                                fontFamily = PixelifySans,
+                                                fontSize = 12.sp,
+                                                color = TheirBubbleText,
+                                                maxLines = 2,
+                                                overflow = TextOverflow.Ellipsis,
+                                            )
+                                            Text(
+                                                text = entry.message.time,
+                                                fontFamily = PixelifySans,
+                                                fontSize = 10.sp,
+                                                color = MutedText,
+                                            )
+                                        }
+                                        Box(
+                                            modifier = Modifier
+                                                .size(30.dp)
+                                                .clickable { state.toggleStarMessage(entry.chatId, entry.message.id) },
+                                            contentAlignment = Alignment.Center,
+                                        ) {
+                                            PixelStarIcon(tint = LanternAmber, filled = true, modifier = Modifier.size(14.dp))
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 @Composable
@@ -1066,16 +1381,18 @@ private fun LitNowItem(
     }
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun ConversationRow(
     conversation: MothConversation,
     onClick: () -> Unit,
+    onLongClick: () -> Unit = {},
     onAvatarClick: () -> Unit,
 ) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .clickable(onClick = onClick)
+            .combinedClickable(onClick = onClick, onLongClick = onLongClick)
             .padding(horizontal = 16.dp, vertical = 12.dp)
             .testTag("chat_item_${conversation.id}"),
         verticalAlignment = Alignment.CenterVertically,
@@ -1114,13 +1431,27 @@ private fun ConversationRow(
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically,
             ) {
-                Text(
-                    text = if (conversation.isGroup) "${conversation.name} (${conversation.members.size})" else conversation.name,
-                    fontFamily = PixelifySans,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 15.sp,
-                    color = TheirBubbleText,
-                )
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                    modifier = Modifier.weight(1f),
+                ) {
+                    Text(
+                        text = if (conversation.isGroup) "${conversation.name} (${conversation.members.size})" else conversation.name,
+                        fontFamily = PixelifySans,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 15.sp,
+                        color = TheirBubbleText,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                    )
+                    if (conversation.isPinned) {
+                        PixelPinIcon(tint = LanternAmber, modifier = Modifier.size(12.dp))
+                    }
+                    if (conversation.isMuted) {
+                        PixelMuteBellIcon(tint = MutedText, modifier = Modifier.size(12.dp))
+                    }
+                }
                 Text(
                     text = conversation.time,
                     fontFamily = PixelifySans,
@@ -1195,10 +1526,10 @@ private fun ConversationRow(
 @Composable
 private fun TabItem(
     label: String,
-    iconSymbol: String? = null,
     iconVector: ImageVector? = null,
     isSelected: Boolean,
     onClick: () -> Unit,
+    customIcon: (@Composable (Color) -> Unit)? = null,
 ) {
     val color = if (isSelected) LanternAmber else PlaceholderText
 
@@ -1222,12 +1553,8 @@ private fun TabItem(
                     tint = color,
                     modifier = Modifier.size(19.dp),
                 )
-            } else if (iconSymbol != null) {
-                Text(
-                    text = iconSymbol,
-                    fontSize = 16.sp,
-                    color = color,
-                )
+            } else if (customIcon != null) {
+                customIcon(color)
             }
         }
         Text(

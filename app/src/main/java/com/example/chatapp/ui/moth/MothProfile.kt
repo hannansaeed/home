@@ -1,5 +1,7 @@
 package com.example.chatapp.ui.moth
 
+import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.PickVisualMediaRequest
 import androidx.activity.result.contract.ActivityResultContracts
@@ -25,35 +27,75 @@ import com.example.chatapp.ui.components.*
 import com.example.chatapp.ui.theme.*
 import kotlinx.coroutines.launch
 
+private enum class SettingsCategory(
+    val title: String,
+    val subtitle: String,
+) {
+    PROFILE("profile", "username, passphrase, bio & avatar"),
+    APPEARANCE("appearance", "lantern hue & message font size"),
+    PRIVACY("privacy", "screenshots, typing, read receipts & pin"),
+    NOTIFICATIONS("notifications", "message alerts, calls & previews"),
+    DATA_STORAGE("data and storage", "media usage, cache & call logs"),
+    CONTACTS("friends / contacts", "your saved handles & active status"),
+}
+
 @Composable
 fun MothProfileView(
     state: MothState,
     onSignOut: () -> Unit,
+    onOpenChat: (String) -> Unit = {},
 ) {
     val scope = rememberCoroutineScope()
-    var editUsername by remember { mutableStateOf(state.currentUsername) }
+    var activeCategory by remember { mutableStateOf<SettingsCategory?>(null) }
+
+    var editUsername by remember(state.currentUsername) { mutableStateOf(state.currentUsername) }
+    var editBio by remember(state.userBio) { mutableStateOf(state.userBio) }
+    var currentPassInput by remember { mutableStateOf("") }
+    var newPassInput by remember { mutableStateOf("") }
+    var profileNotice by remember { mutableStateOf<String?>(null) }
+    var profileError by remember { mutableStateOf<String?>(null) }
+    var isSavingProfile by remember { mutableStateOf(false) }
+
     var showLogoutConfirm by remember { mutableStateOf(false) }
     var showAvatarOptions by remember { mutableStateOf(false) }
+    var pendingAvatarCropUri by remember { mutableStateOf<Uri?>(null) }
     var avatarError by remember { mutableStateOf<String?>(null) }
     var isUpdatingAvatar by remember { mutableStateOf(false) }
+
     var showPinSetupDialog by remember { mutableStateOf(false) }
     var pinInput by remember { mutableStateOf("") }
     var pinError by remember { mutableStateOf<String?>(null) }
+
+    var storageStats by remember { mutableStateOf(StorageStats()) }
+    var storageActionNotice by remember { mutableStateOf<String?>(null) }
+
+    var newFriendHandle by remember { mutableStateOf("") }
+    var friendError by remember { mutableStateOf<String?>(null) }
+
     val scrollState = rememberScrollState()
+
+    BackHandler(enabled = activeCategory != null || showPinSetupDialog || showAvatarOptions || pendingAvatarCropUri != null) {
+        when {
+            pendingAvatarCropUri != null -> pendingAvatarCropUri = null
+            showPinSetupDialog -> showPinSetupDialog = false
+            showAvatarOptions -> showAvatarOptions = false
+            activeCategory != null -> activeCategory = null
+        }
+    }
+
+    LaunchedEffect(activeCategory) {
+        if (activeCategory == SettingsCategory.DATA_STORAGE) {
+            storageStats = state.computeStorageStats()
+            storageActionNotice = null
+        }
+    }
 
     val avatarPickerLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.PickVisualMedia()
     ) { uri ->
         if (uri != null) {
-            isUpdatingAvatar = true
             avatarError = null
-            scope.launch {
-                val res = state.updateCustomAvatar(uri)
-                res.onFailure { err ->
-                    avatarError = err.localizedMessage ?: "failed to set avatar photo"
-                }
-                isUpdatingAvatar = false
-            }
+            pendingAvatarCropUri = uri
         }
     }
 
@@ -65,6 +107,10 @@ fun MothProfileView(
         Color(0xFF70D6FF), // Sky blue
     )
 
+    val friendsList = remember(state.conversations) {
+        state.conversations.filter { !it.isGroup && !it.name.equals("support", ignoreCase = true) }
+    }
+
     Box(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
@@ -72,361 +118,988 @@ fun MothProfileView(
                 .background(MothBgDark)
                 .verticalScroll(scrollState)
                 .padding(16.dp),
-            verticalArrangement = Arrangement.spacedBy(16.dp),
+            verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            // Header
-            Column {
-                Text(
-                    text = "operator lantern",
-                    fontFamily = PixelifySans,
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 18.sp,
-                    color = LanternAmber,
-                )
-                Text(
-                    text = "stored locally on your device",
-                    fontFamily = PixelifySans,
-                    fontSize = 12.sp,
-                    color = MutedText,
-                )
-            }
+            val category = activeCategory
+            if (category == null) {
+                // Root Settings & Operator Profile Header
+                Column {
+                    Text(
+                        text = "settings",
+                        fontFamily = PixelifySans,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 18.sp,
+                        color = LanternAmber,
+                    )
+                    Text(
+                        text = "lantern identity, privacy & storage",
+                        fontFamily = PixelifySans,
+                        fontSize = 12.sp,
+                        color = MutedText,
+                    )
+                }
 
-            // Profile Card
-            SteppedBox(
-                modifier = Modifier.fillMaxWidth(),
-                backgroundColor = TheirBubbleFill,
-                borderColor = TheirBubbleBorder,
-                cutSize = 4.dp,
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp),
+                // Operator Summary Card
+                SteppedBox(
+                    modifier = Modifier.fillMaxWidth(),
+                    backgroundColor = TheirBubbleFill,
+                    borderColor = TheirBubbleBorder,
+                    cutSize = 4.dp,
                 ) {
-                    Row(
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(14.dp),
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(14.dp),
                     ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(4.dp),
-                            modifier = Modifier
-                                .clickable { showAvatarOptions = true }
-                                .testTag("profile_avatar_button"),
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(14.dp),
                         ) {
-                            UserAvatar(
-                                avatarPath = state.userAvatarPath,
-                                color = state.userAvatarColor,
-                                size = 54.dp,
-                            )
-                            Text(
-                                text = if (isUpdatingAvatar) "saving..." else "tap photo",
-                                fontFamily = PixelifySans,
-                                fontSize = 10.sp,
-                                color = LanternAmber,
-                            )
-                        }
-
-                        Column {
-                            Text(
-                                text = state.currentUsername,
-                                fontFamily = PixelifySans,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp,
-                                color = TheirBubbleText,
-                            )
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                            Column(
+                                horizontalAlignment = Alignment.CenterHorizontally,
+                                verticalArrangement = Arrangement.spacedBy(4.dp),
+                                modifier = Modifier
+                                    .clickable { showAvatarOptions = true }
+                                    .testTag("profile_avatar_button"),
                             ) {
-                                Box(modifier = Modifier.size(6.dp).background(SecureGreen))
+                                UserAvatar(
+                                    avatarPath = state.userAvatarPath,
+                                    color = state.userAvatarColor,
+                                    size = 54.dp,
+                                )
                                 Text(
-                                    text = "lantern lit • active",
+                                    text = if (isUpdatingAvatar) "saving..." else "tap photo",
                                     fontFamily = PixelifySans,
-                                    fontSize = 12.sp,
-                                    color = SecureGreen,
+                                    fontSize = 10.sp,
+                                    color = LanternAmber,
                                 )
                             }
-                        }
-                    }
 
-                    if (avatarError != null) {
-                        Text(
-                            text = avatarError ?: "",
-                            fontFamily = PixelifySans,
-                            fontSize = 11.sp,
-                            color = WaxSealRed,
-                        )
-                    }
-
-                    // Edit Handle
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(
-                            text = "change lantern handle",
-                            fontFamily = PixelifySans,
-                            fontSize = 12.sp,
-                            color = MutedText,
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            SteppedBox(
-                                modifier = Modifier
-                                    .weight(1f)
-                                    .height(40.dp),
-                                backgroundColor = MothBgDark,
-                                borderColor = TheirBubbleBorder,
-                                cutSize = 3.dp,
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .fillMaxSize()
-                                        .padding(horizontal = 10.dp),
-                                    contentAlignment = Alignment.CenterStart,
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = state.currentUsername,
+                                    fontFamily = PixelifySans,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 16.sp,
+                                    color = TheirBubbleText,
+                                )
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
                                 ) {
-                                    BasicTextField(
-                                        value = editUsername,
-                                        onValueChange = { editUsername = it },
-                                        textStyle = TextStyle(
-                                            fontFamily = PixelifySans,
-                                            fontSize = 14.sp,
-                                            color = TheirBubbleText,
-                                        ),
-                                        cursorBrush = SolidColor(LanternAmber),
-                                        singleLine = true,
-                                        modifier = Modifier.fillMaxWidth(),
+                                    Box(modifier = Modifier.size(6.dp).background(SecureGreen))
+                                    Text(
+                                        text = "lantern lit • active",
+                                        fontFamily = PixelifySans,
+                                        fontSize = 12.sp,
+                                        color = SecureGreen,
+                                    )
+                                }
+                                if (state.userBio.isNotBlank()) {
+                                    Text(
+                                        text = state.userBio,
+                                        fontFamily = PixelifySans,
+                                        fontSize = 11.sp,
+                                        color = MutedText,
+                                        modifier = Modifier.padding(top = 4.dp),
                                     )
                                 }
                             }
+                        }
 
-                            SteppedButton(
-                                text = "save",
-                                onClick = {
-                                    if (editUsername.isNotBlank()) {
-                                        state.currentUsername = editUsername.trim()
-                                    }
-                                },
-                                backgroundColor = MyBubbleFill,
-                                borderColor = MyBubbleBorder,
-                                textColor = MyBubbleText,
-                                cutSize = 3.dp,
+                        if (avatarError != null) {
+                            Text(
+                                text = avatarError ?: "",
+                                fontFamily = PixelifySans,
+                                fontSize = 11.sp,
+                                color = WaxSealRed,
                             )
                         }
                     }
+                }
 
-                    // Choose Avatar Color
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                        Text(
-                            text = "lantern hue",
-                            fontFamily = PixelifySans,
-                            fontSize = 12.sp,
-                            color = MutedText,
+                // Category Navigation Rows (WhatsApp-style)
+                SteppedBox(
+                    modifier = Modifier.fillMaxWidth(),
+                    backgroundColor = TheirBubbleFill,
+                    borderColor = TheirBubbleBorder,
+                    cutSize = 4.dp,
+                ) {
+                    Column(modifier = Modifier.fillMaxWidth()) {
+                        SettingsCategoryRow(
+                            title = SettingsCategory.PROFILE.title,
+                            subtitle = SettingsCategory.PROFILE.subtitle,
+                            testTag = "settings_category_profile",
+                            icon = { PixelPersonIcon(tint = LanternAmber, modifier = Modifier.size(18.dp)) },
+                            onClick = {
+                                profileNotice = null
+                                profileError = null
+                                activeCategory = SettingsCategory.PROFILE
+                            },
                         )
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MothDivider))
+                        SettingsCategoryRow(
+                            title = SettingsCategory.APPEARANCE.title,
+                            subtitle = SettingsCategory.APPEARANCE.subtitle,
+                            testTag = "settings_category_appearance",
+                            icon = { PixelPaletteIcon(tint = LanternAmber, modifier = Modifier.size(18.dp)) },
+                            onClick = { activeCategory = SettingsCategory.APPEARANCE },
+                        )
+                        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MothDivider))
+                        SettingsCategoryRow(
+                            title = SettingsCategory.PRIVACY.title,
+                            subtitle = SettingsCategory.PRIVACY.subtitle,
+                            testTag = "settings_category_privacy",
+                            icon = { PixelShieldIcon(tint = SecureGreen, modifier = Modifier.size(18.dp)) },
+                            onClick = { activeCategory = SettingsCategory.PRIVACY },
+                        )
+                        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MothDivider))
+                        SettingsCategoryRow(
+                            title = SettingsCategory.NOTIFICATIONS.title,
+                            subtitle = SettingsCategory.NOTIFICATIONS.subtitle,
+                            testTag = "settings_category_notifications",
+                            icon = { PixelBellIcon(tint = LanternAmber, modifier = Modifier.size(18.dp)) },
+                            onClick = { activeCategory = SettingsCategory.NOTIFICATIONS },
+                        )
+                        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MothDivider))
+                        SettingsCategoryRow(
+                            title = SettingsCategory.DATA_STORAGE.title,
+                            subtitle = SettingsCategory.DATA_STORAGE.subtitle,
+                            testTag = "settings_category_storage",
+                            icon = { PixelDatabaseIcon(tint = TheirBubbleText, modifier = Modifier.size(18.dp)) },
+                            onClick = { activeCategory = SettingsCategory.DATA_STORAGE },
+                        )
+                        Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MothDivider))
+                        SettingsCategoryRow(
+                            title = SettingsCategory.CONTACTS.title,
+                            subtitle = "${friendsList.size} saved lantern contacts",
+                            testTag = "settings_category_contacts",
+                            icon = { PixelUsersIcon(tint = Color(0xFF70D6FF), modifier = Modifier.size(18.dp)) },
+                            onClick = { activeCategory = SettingsCategory.CONTACTS },
+                        )
+                    }
+                }
+
+                // Extinguish Lantern / Sign Out
+                if (!showLogoutConfirm) {
+                    SteppedButton(
+                        text = "extinguish lantern (log out)",
+                        onClick = { showLogoutConfirm = true },
+                        backgroundColor = WaxSealRed,
+                        borderColor = WaxSealDarkEdge,
+                        textColor = Color.White,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .testTag("sign_out_button"),
+                    )
+                } else {
+                    SteppedBox(
+                        modifier = Modifier.fillMaxWidth(),
+                        backgroundColor = TheirBubbleFill,
+                        borderColor = WaxSealRed,
+                        cutSize = 4.dp,
+                    ) {
+                        Column(
+                            modifier = Modifier.padding(14.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
-                            avatarColors.forEach { color ->
-                                val isSelected = state.userAvatarColor == color
-                                Box(
-                                    modifier = Modifier
-                                        .size(32.dp)
-                                        .background(color, SteppedCornerShape(3.dp))
-                                        .border(
-                                            width = if (isSelected) 3.dp else 1.dp,
-                                            color = if (isSelected) LanternAmber else MothBgDark,
-                                            shape = SteppedCornerShape(3.dp),
-                                        )
-                                        .clickable { state.updateAvatarColor(color) },
+                            Text(
+                                text = "extinguish your lantern?",
+                                fontFamily = PixelifySans,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 14.sp,
+                                color = TheirBubbleText,
+                            )
+                            Text(
+                                text = "your local history stays saved on this device.",
+                                fontFamily = PixelifySans,
+                                fontSize = 12.sp,
+                                color = MutedText,
+                            )
+                            Row(
+                                horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                SteppedButton(
+                                    text = "yes, extinguish",
+                                    onClick = onSignOut,
+                                    backgroundColor = WaxSealRed,
+                                    borderColor = WaxSealDarkEdge,
+                                    textColor = Color.White,
+                                    modifier = Modifier.testTag("confirm_sign_out_button"),
+                                )
+                                SteppedButton(
+                                    text = "keep lit",
+                                    onClick = { showLogoutConfirm = false },
+                                    backgroundColor = TheirBubbleBorder,
+                                    borderColor = MothDivider,
+                                    textColor = TheirBubbleText,
                                 )
                             }
                         }
                     }
                 }
-            }
-
-            SteppedBox(
-                modifier = Modifier.fillMaxWidth(),
-                backgroundColor = TheirBubbleFill,
-                borderColor = TheirBubbleBorder,
-                cutSize = 4.dp,
-            ) {
-                Column(
-                    modifier = Modifier.padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(12.dp),
+            } else {
+                // Category Subpage Header with Back Arrow
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
                 ) {
-                    Text(
-                        text = "privacy & screen",
-                        fontFamily = PixelifySans,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp,
-                        color = LanternAmber,
-                    )
-
-                    PrivacyToggleRow(
-                        title = "block screenshots",
-                        subtitle = "hide screen in recents & block captures",
-                        checked = state.screenshotBlockingEnabled,
-                        testTag = "toggle_screenshot_block",
-                        onToggle = { state.setScreenshotBlocking(!state.screenshotBlockingEnabled) },
-                    )
-
-                    PrivacyToggleRow(
-                        title = "hide typing indicator",
-                        subtitle = "others won't see when you're typing",
-                        checked = state.hideTypingIndicators,
-                        testTag = "toggle_hide_typing",
-                        onToggle = { state.setHideTyping(!state.hideTypingIndicators) },
-                    )
-
-                    PrivacyToggleRow(
-                        title = "disable read receipts",
-                        subtitle = "don't send 'seen' confirmations",
-                        checked = state.disableReadReceipts,
-                        testTag = "toggle_disable_receipts",
-                        onToggle = { state.updateDisableReadReceipts(!state.disableReadReceipts) },
-                    )
-
-                    // App Lock PIN
-                    Row(
+                    SteppedBox(
                         modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable {
-                                if (state.appLockEnabled) {
-                                    state.disableAppLock()
-                                } else {
-                                    pinInput = ""
-                                    pinError = null
-                                    showPinSetupDialog = true
-                                }
-                            }
-                            .padding(vertical = 4.dp)
-                            .testTag("toggle_app_lock"),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
+                            .size(38.dp)
+                            .clickable { activeCategory = null }
+                            .testTag("settings_back_button"),
+                        backgroundColor = MothHeaderBg,
+                        borderColor = LanternAmber,
+                        cutSize = 3.dp,
+                        borderWidth = 1.dp,
                     ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = "app lock (4-digit pin)",
-                                fontFamily = PixelifySans,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 13.sp,
-                                color = TheirBubbleText,
-                            )
-                            Text(
-                                text = if (state.appLockEnabled) "locked when leaving app • tap to remove" else "require pin when opening app",
-                                fontFamily = PixelifySans,
-                                fontSize = 11.sp,
-                                color = MutedText,
-                            )
-                        }
-                        SteppedBox(
-                            backgroundColor = if (state.appLockEnabled) SecureGreen else MothBgDark,
-                            borderColor = if (state.appLockEnabled) SecureGreen else MothDivider,
-                            cutSize = 2.dp,
-                            borderWidth = 1.dp,
-                        ) {
-                            Text(
-                                text = if (state.appLockEnabled) "ON" else "OFF",
-                                fontFamily = PixelifySans,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 11.sp,
-                                color = if (state.appLockEnabled) MothBgDark else MutedText,
-                                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
-                            )
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            PixelBackArrowIcon(tint = LanternAmber, modifier = Modifier.size(22.dp))
                         }
                     }
-
-                    // Message Font Size
-                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Column {
                         Text(
-                            text = "message font size",
+                            text = category.title,
                             fontFamily = PixelifySans,
-                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 17.sp,
+                            color = LanternAmber,
+                        )
+                        Text(
+                            text = category.subtitle,
+                            fontFamily = PixelifySans,
+                            fontSize = 11.sp,
                             color = MutedText,
                         )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            val sizeOptions = listOf(
-                                "small" to 0.85f,
-                                "medium" to 1.0f,
-                                "large" to 1.25f,
+                    }
+                }
+
+                when (category) {
+                    SettingsCategory.PROFILE -> {
+                        if (profileNotice != null) {
+                            Text(
+                                text = profileNotice ?: "",
+                                fontFamily = PixelifySans,
+                                fontSize = 12.sp,
+                                color = SecureGreen,
                             )
-                            sizeOptions.forEach { (label, scaleVal) ->
-                                val selected = kotlin.math.abs(state.messageFontScale - scaleVal) < 0.05f
+                        }
+                        if (profileError != null) {
+                            Text(
+                                text = profileError ?: "",
+                                fontFamily = PixelifySans,
+                                fontSize = 12.sp,
+                                color = WaxSealRed,
+                            )
+                        }
+
+                        // Avatar Photo & Default Avatar Color
+                        SteppedBox(
+                            modifier = Modifier.fillMaxWidth(),
+                            backgroundColor = TheirBubbleFill,
+                            borderColor = TheirBubbleBorder,
+                            cutSize = 4.dp,
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                                ) {
+                                    UserAvatar(
+                                        avatarPath = state.userAvatarPath,
+                                        color = state.userAvatarColor,
+                                        size = 48.dp,
+                                    )
+                                    SteppedButton(
+                                        text = if (isUpdatingAvatar) "saving..." else "change avatar photo",
+                                        onClick = { showAvatarOptions = true },
+                                        backgroundColor = MothBgDark,
+                                        borderColor = LanternAmber,
+                                        textColor = LanternAmber,
+                                        cutSize = 3.dp,
+                                        modifier = Modifier.testTag("profile_change_avatar_button"),
+                                    )
+                                }
+
+                                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MothDivider))
+
+                                Text(
+                                    text = "default avatar color",
+                                    fontFamily = PixelifySans,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp,
+                                    color = TheirBubbleText,
+                                )
+                                Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                    avatarColors.forEach { color ->
+                                        val isSelected = state.userAvatarColor == color
+                                        Box(
+                                            modifier = Modifier
+                                                .size(36.dp)
+                                                .background(color, SteppedCornerShape(3.dp))
+                                                .border(
+                                                    width = if (isSelected) 3.dp else 1.dp,
+                                                    color = if (isSelected) LanternAmber else MothBgDark,
+                                                    shape = SteppedCornerShape(3.dp),
+                                                )
+                                                .clickable { state.updateAvatarColor(color) },
+                                        )
+                                    }
+                                }
+                            }
+                        }
+
+                        // Username & Bio Card
+                        SteppedBox(
+                            modifier = Modifier.fillMaxWidth(),
+                            backgroundColor = TheirBubbleFill,
+                            borderColor = TheirBubbleBorder,
+                            cutSize = 4.dp,
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                Text(
+                                    text = "username",
+                                    fontFamily = PixelifySans,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp,
+                                    color = TheirBubbleText,
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    SteppedBox(
+                                        modifier = Modifier.weight(1f).height(40.dp),
+                                        backgroundColor = MothBgDark,
+                                        borderColor = MothDivider,
+                                        cutSize = 3.dp,
+                                    ) {
+                                        Box(
+                                            modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
+                                            contentAlignment = Alignment.CenterStart,
+                                        ) {
+                                            BasicTextField(
+                                                value = editUsername,
+                                                onValueChange = { editUsername = it; profileError = null; profileNotice = null },
+                                                textStyle = TextStyle(fontFamily = PixelifySans, fontSize = 14.sp, color = TheirBubbleText),
+                                                cursorBrush = SolidColor(LanternAmber),
+                                                singleLine = true,
+                                                modifier = Modifier.fillMaxWidth().testTag("profile_username_input"),
+                                            )
+                                        }
+                                    }
+                                    SteppedButton(
+                                        text = if (isSavingProfile) "..." else "save",
+                                        onClick = {
+                                            if (!isSavingProfile) {
+                                                isSavingProfile = true
+                                                profileError = null
+                                                profileNotice = null
+                                                state.changeUsername(editUsername) { err ->
+                                                    isSavingProfile = false
+                                                    if (err != null) profileError = err else profileNotice = "username saved"
+                                                }
+                                            }
+                                        },
+                                        backgroundColor = MyBubbleFill,
+                                        borderColor = MyBubbleBorder,
+                                        textColor = MyBubbleText,
+                                        cutSize = 3.dp,
+                                        modifier = Modifier.testTag("profile_save_username_button"),
+                                    )
+                                }
+
+                                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MothDivider))
+
+                                Text(
+                                    text = "bio",
+                                    fontFamily = PixelifySans,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp,
+                                    color = TheirBubbleText,
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                ) {
+                                    SteppedBox(
+                                        modifier = Modifier.weight(1f).height(44.dp),
+                                        backgroundColor = MothBgDark,
+                                        borderColor = MothDivider,
+                                        cutSize = 3.dp,
+                                    ) {
+                                        Box(
+                                            modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
+                                            contentAlignment = Alignment.CenterStart,
+                                        ) {
+                                            if (editBio.isEmpty()) {
+                                                Text(
+                                                    text = "say something about your lantern...",
+                                                    fontFamily = PixelifySans,
+                                                    fontSize = 12.sp,
+                                                    color = PlaceholderText,
+                                                )
+                                            }
+                                            BasicTextField(
+                                                value = editBio,
+                                                onValueChange = { editBio = it.take(120); profileNotice = null },
+                                                textStyle = TextStyle(fontFamily = PixelifySans, fontSize = 13.sp, color = TheirBubbleText),
+                                                cursorBrush = SolidColor(LanternAmber),
+                                                singleLine = true,
+                                                modifier = Modifier.fillMaxWidth().testTag("profile_bio_input"),
+                                            )
+                                        }
+                                    }
+                                    SteppedButton(
+                                        text = "save",
+                                        onClick = {
+                                            profileError = null
+                                            state.updateBio(editBio) {
+                                                profileNotice = "bio saved"
+                                            }
+                                        },
+                                        backgroundColor = MyBubbleFill,
+                                        borderColor = MyBubbleBorder,
+                                        textColor = MyBubbleText,
+                                        cutSize = 3.dp,
+                                        modifier = Modifier.testTag("profile_save_bio_button"),
+                                    )
+                                }
+                            }
+                        }
+
+                        // Passphrase Change Card
+                        SteppedBox(
+                            modifier = Modifier.fillMaxWidth(),
+                            backgroundColor = TheirBubbleFill,
+                            borderColor = TheirBubbleBorder,
+                            cutSize = 4.dp,
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Text(
+                                    text = "change passphrase",
+                                    fontFamily = PixelifySans,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp,
+                                    color = TheirBubbleText,
+                                )
+                                SteppedBox(
+                                    modifier = Modifier.fillMaxWidth().height(40.dp),
+                                    backgroundColor = MothBgDark,
+                                    borderColor = MothDivider,
+                                    cutSize = 3.dp,
+                                ) {
+                                    Box(
+                                        modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
+                                        contentAlignment = Alignment.CenterStart,
+                                    ) {
+                                        if (currentPassInput.isEmpty()) {
+                                            Text(
+                                                text = "current passphrase",
+                                                fontFamily = PixelifySans,
+                                                fontSize = 12.sp,
+                                                color = PlaceholderText,
+                                            )
+                                        }
+                                        BasicTextField(
+                                            value = currentPassInput,
+                                            onValueChange = { currentPassInput = it; profileError = null; profileNotice = null },
+                                            textStyle = TextStyle(fontFamily = PixelifySans, fontSize = 13.sp, color = TheirBubbleText),
+                                            cursorBrush = SolidColor(LanternAmber),
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth().testTag("profile_current_pass_input"),
+                                        )
+                                    }
+                                }
+                                SteppedBox(
+                                    modifier = Modifier.fillMaxWidth().height(40.dp),
+                                    backgroundColor = MothBgDark,
+                                    borderColor = MothDivider,
+                                    cutSize = 3.dp,
+                                ) {
+                                    Box(
+                                        modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
+                                        contentAlignment = Alignment.CenterStart,
+                                    ) {
+                                        if (newPassInput.isEmpty()) {
+                                            Text(
+                                                text = "new passphrase (min 3 chars)",
+                                                fontFamily = PixelifySans,
+                                                fontSize = 12.sp,
+                                                color = PlaceholderText,
+                                            )
+                                        }
+                                        BasicTextField(
+                                            value = newPassInput,
+                                            onValueChange = { newPassInput = it; profileError = null; profileNotice = null },
+                                            textStyle = TextStyle(fontFamily = PixelifySans, fontSize = 13.sp, color = TheirBubbleText),
+                                            cursorBrush = SolidColor(LanternAmber),
+                                            singleLine = true,
+                                            modifier = Modifier.fillMaxWidth().testTag("profile_new_pass_input"),
+                                        )
+                                    }
+                                }
                                 SteppedButton(
-                                    text = label,
-                                    onClick = { state.setFontScale(scaleVal) },
-                                    backgroundColor = if (selected) MyBubbleFill else MothBgDark,
-                                    borderColor = if (selected) MyBubbleBorder else MothDivider,
-                                    textColor = if (selected) MyBubbleText else TheirBubbleText,
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .testTag("font_size_$label"),
+                                    text = "update passphrase",
+                                    onClick = {
+                                        profileError = null
+                                        profileNotice = null
+                                        state.updatePassphrase(currentPassInput, newPassInput) { err ->
+                                            if (err != null) {
+                                                profileError = err
+                                            } else {
+                                                profileNotice = "passphrase updated"
+                                                currentPassInput = ""
+                                                newPassInput = ""
+                                            }
+                                        }
+                                    },
+                                    backgroundColor = MothBgDark,
+                                    borderColor = LanternAmber,
+                                    textColor = LanternAmber,
+                                    modifier = Modifier.fillMaxWidth().testTag("profile_update_pass_button"),
                                     cutSize = 3.dp,
                                 )
                             }
                         }
                     }
-                }
-            }
 
-            // Extinguish Lantern / Sign Out button
-            if (!showLogoutConfirm) {
-                SteppedButton(
-                    text = "extinguish lantern (log out)",
-                    onClick = { showLogoutConfirm = true },
-                    backgroundColor = WaxSealRed,
-                    borderColor = WaxSealDarkEdge,
-                    textColor = Color.White,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .testTag("sign_out_button"),
-                )
-            } else {
-                SteppedBox(
-                    modifier = Modifier.fillMaxWidth(),
-                    backgroundColor = TheirBubbleFill,
-                    borderColor = WaxSealRed,
-                    cutSize = 4.dp,
-                ) {
-                    Column(
-                        modifier = Modifier.padding(14.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally,
-                        verticalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        Text(
-                            text = "extinguish your lantern?",
-                            fontFamily = PixelifySans,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp,
-                            color = TheirBubbleText,
-                        )
-                        Text(
-                            text = "your local history stays saved on this device.",
-                            fontFamily = PixelifySans,
-                            fontSize = 12.sp,
-                            color = MutedText,
-                        )
-                        Row(
-                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                    SettingsCategory.APPEARANCE -> {
+                        SteppedBox(
+                            modifier = Modifier.fillMaxWidth(),
+                            backgroundColor = TheirBubbleFill,
+                            borderColor = TheirBubbleBorder,
+                            cutSize = 4.dp,
                         ) {
-                            SteppedButton(
-                                text = "yes, extinguish",
-                                onClick = onSignOut,
-                                backgroundColor = WaxSealRed,
-                                borderColor = WaxSealDarkEdge,
-                                textColor = Color.White,
-                                modifier = Modifier.testTag("confirm_sign_out_button"),
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(14.dp),
+                            ) {
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(
+                                        text = "lantern hue",
+                                        fontFamily = PixelifySans,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp,
+                                        color = TheirBubbleText,
+                                    )
+                                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                                        avatarColors.forEach { color ->
+                                            val isSelected = state.userAvatarColor == color
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(36.dp)
+                                                    .background(color, SteppedCornerShape(3.dp))
+                                                    .border(
+                                                        width = if (isSelected) 3.dp else 1.dp,
+                                                        color = if (isSelected) LanternAmber else MothBgDark,
+                                                        shape = SteppedCornerShape(3.dp),
+                                                    )
+                                                    .clickable { state.updateAvatarColor(color) },
+                                            )
+                                        }
+                                    }
+                                }
+
+                                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MothDivider))
+
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(
+                                        text = "message font size",
+                                        fontFamily = PixelifySans,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp,
+                                        color = TheirBubbleText,
+                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        val sizeOptions = listOf(
+                                            "small" to 0.85f,
+                                            "medium" to 1.0f,
+                                            "large" to 1.25f,
+                                        )
+                                        sizeOptions.forEach { (label, scaleVal) ->
+                                            val selected = kotlin.math.abs(state.messageFontScale - scaleVal) < 0.05f
+                                            SteppedButton(
+                                                text = label,
+                                                onClick = { state.setFontScale(scaleVal) },
+                                                backgroundColor = if (selected) MyBubbleFill else MothBgDark,
+                                                borderColor = if (selected) MyBubbleBorder else MothDivider,
+                                                textColor = if (selected) MyBubbleText else TheirBubbleText,
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .testTag("font_size_$label"),
+                                                cutSize = 3.dp,
+                                            )
+                                        }
+                                    }
+
+                                    // Live preview bubble
+                                    SteppedBox(
+                                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
+                                        backgroundColor = MyBubbleFill,
+                                        borderColor = MyBubbleBorder,
+                                        cutSize = 4.dp,
+                                    ) {
+                                        Text(
+                                            text = "preview: moths gather around warm lanterns.",
+                                            fontFamily = PixelifySans,
+                                            fontSize = (14f * state.messageFontScale).sp,
+                                            lineHeight = (19f * state.messageFontScale).sp,
+                                            color = MyBubbleText,
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+
+                    SettingsCategory.PRIVACY -> {
+                        SteppedBox(
+                            modifier = Modifier.fillMaxWidth(),
+                            backgroundColor = TheirBubbleFill,
+                            borderColor = TheirBubbleBorder,
+                            cutSize = 4.dp,
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                PrivacyToggleRow(
+                                    title = "block screenshots",
+                                    subtitle = "hide screen in recents & block captures",
+                                    checked = state.screenshotBlockingEnabled,
+                                    testTag = "toggle_screenshot_block",
+                                    onToggle = { state.setScreenshotBlocking(!state.screenshotBlockingEnabled) },
+                                )
+                                PrivacyToggleRow(
+                                    title = "hide typing indicator",
+                                    subtitle = "others won't see when you're typing",
+                                    checked = state.hideTypingIndicators,
+                                    testTag = "toggle_hide_typing",
+                                    onToggle = { state.setHideTyping(!state.hideTypingIndicators) },
+                                )
+                                PrivacyToggleRow(
+                                    title = "disable read receipts",
+                                    subtitle = "don't send 'seen' confirmations",
+                                    checked = state.disableReadReceipts,
+                                    testTag = "toggle_disable_receipts",
+                                    onToggle = { state.updateDisableReadReceipts(!state.disableReadReceipts) },
+                                )
+                                PrivacyToggleRow(
+                                    title = "app lock (4-digit pin)",
+                                    subtitle = if (state.appLockEnabled) "locked when leaving app • tap to remove" else "require pin when opening app",
+                                    checked = state.appLockEnabled,
+                                    testTag = "toggle_app_lock",
+                                    onToggle = {
+                                        if (state.appLockEnabled) {
+                                            state.disableAppLock()
+                                        } else {
+                                            pinInput = ""
+                                            pinError = null
+                                            showPinSetupDialog = true
+                                        }
+                                    },
+                                )
+                            }
+                        }
+                    }
+
+                    SettingsCategory.NOTIFICATIONS -> {
+                        SteppedBox(
+                            modifier = Modifier.fillMaxWidth(),
+                            backgroundColor = TheirBubbleFill,
+                            borderColor = TheirBubbleBorder,
+                            cutSize = 4.dp,
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(12.dp),
+                            ) {
+                                PrivacyToggleRow(
+                                    title = "message notifications",
+                                    subtitle = "alert when new encrypted messages arrive",
+                                    checked = state.messageNotificationsEnabled,
+                                    testTag = "toggle_msg_notifications",
+                                    onToggle = { state.setMessageNotifications(!state.messageNotificationsEnabled) },
+                                )
+                                PrivacyToggleRow(
+                                    title = "call notifications",
+                                    subtitle = "alert for incoming voice calls",
+                                    checked = state.callNotificationsEnabled,
+                                    testTag = "toggle_call_notifications",
+                                    onToggle = { state.setCallNotifications(!state.callNotificationsEnabled) },
+                                )
+                                PrivacyToggleRow(
+                                    title = "show message previews",
+                                    subtitle = "display sender & snippet in notifications",
+                                    checked = state.notificationPreviewsEnabled,
+                                    testTag = "toggle_notif_previews",
+                                    onToggle = { state.setNotificationPreviews(!state.notificationPreviewsEnabled) },
+                                )
+                            }
+                        }
+                    }
+
+                    SettingsCategory.DATA_STORAGE -> {
+                        SteppedBox(
+                            modifier = Modifier.fillMaxWidth(),
+                            backgroundColor = TheirBubbleFill,
+                            borderColor = TheirBubbleBorder,
+                            cutSize = 4.dp,
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(16.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp),
+                            ) {
+                                Text(
+                                    text = "device storage breakdown",
+                                    fontFamily = PixelifySans,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 14.sp,
+                                    color = LanternAmber,
+                                )
+                                StorageMetricRow("cached media & stickers", formatStorageBytes(storageStats.mediaBytes))
+                                StorageMetricRow("stored messages", "${storageStats.messageCount}")
+                                StorageMetricRow("conversations", "${storageStats.chatCount}")
+                                StorageMetricRow("call history logs", "${storageStats.callLogCount}")
+                            }
+                        }
+
+                        if (storageActionNotice != null) {
+                            Text(
+                                text = storageActionNotice ?: "",
+                                fontFamily = PixelifySans,
+                                fontSize = 12.sp,
+                                color = SecureGreen,
                             )
-                            SteppedButton(
-                                text = "keep lit",
-                                onClick = { showLogoutConfirm = false },
-                                backgroundColor = TheirBubbleBorder,
+                        }
+
+                        SteppedButton(
+                            text = "clear cached media",
+                            onClick = {
+                                scope.launch {
+                                    state.clearCachedMedia()
+                                    storageStats = state.computeStorageStats()
+                                    storageActionNotice = "cached media cleared"
+                                }
+                            },
+                            backgroundColor = MothHeaderBg,
+                            borderColor = LanternAmber,
+                            textColor = LanternAmber,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("clear_cached_media_button"),
+                            cutSize = 3.dp,
+                        )
+
+                        SteppedButton(
+                            text = "clear call history",
+                            onClick = {
+                                scope.launch {
+                                    state.clearAllCallLogs()
+                                    storageStats = state.computeStorageStats()
+                                    storageActionNotice = "call history cleared"
+                                }
+                            },
+                            backgroundColor = MothHeaderBg,
+                            borderColor = WaxSealRed,
+                            textColor = WaxSealRed,
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .testTag("clear_call_logs_button"),
+                            cutSize = 3.dp,
+                        )
+                    }
+
+                    SettingsCategory.CONTACTS -> {
+                        // Add friend by handle
+                        SteppedBox(
+                            modifier = Modifier.fillMaxWidth(),
+                            backgroundColor = MothHeaderBg,
+                            borderColor = TheirBubbleBorder,
+                            cutSize = 4.dp,
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                Text(
+                                    text = "add friend by handle",
+                                    fontFamily = PixelifySans,
+                                    fontSize = 12.sp,
+                                    color = MutedText,
+                                )
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    verticalAlignment = Alignment.CenterVertically,
+                                ) {
+                                    SteppedBox(
+                                        modifier = Modifier.weight(1f).height(38.dp),
+                                        backgroundColor = MothBgDark,
+                                        borderColor = MothDivider,
+                                        cutSize = 3.dp,
+                                    ) {
+                                        Box(
+                                            modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
+                                            contentAlignment = Alignment.CenterStart,
+                                        ) {
+                                            if (newFriendHandle.isEmpty()) {
+                                                Text(
+                                                    text = "e.g. aster",
+                                                    fontFamily = PixelifySans,
+                                                    fontSize = 12.sp,
+                                                    color = PlaceholderText,
+                                                )
+                                            }
+                                            BasicTextField(
+                                                value = newFriendHandle,
+                                                onValueChange = {
+                                                    newFriendHandle = it
+                                                    friendError = null
+                                                },
+                                                textStyle = TextStyle(
+                                                    fontFamily = PixelifySans,
+                                                    fontSize = 13.sp,
+                                                    color = TheirBubbleText,
+                                                ),
+                                                cursorBrush = SolidColor(LanternAmber),
+                                                singleLine = true,
+                                                modifier = Modifier
+                                                    .fillMaxWidth()
+                                                    .testTag("add_friend_input"),
+                                            )
+                                        }
+                                    }
+                                    SteppedButton(
+                                        text = "+ add",
+                                        onClick = {
+                                            val handle = newFriendHandle.trim()
+                                            if (handle.isNotBlank()) {
+                                                state.createNewChat(
+                                                    name = handle,
+                                                    initialMessage = "",
+                                                    onError = { friendError = it },
+                                                    onSuccess = {
+                                                        newFriendHandle = ""
+                                                        friendError = null
+                                                    },
+                                                )
+                                            }
+                                        },
+                                        backgroundColor = MyBubbleFill,
+                                        borderColor = MyBubbleBorder,
+                                        textColor = MyBubbleText,
+                                        cutSize = 3.dp,
+                                    )
+                                }
+                                if (friendError != null) {
+                                    Text(
+                                        text = friendError ?: "",
+                                        fontFamily = PixelifySans,
+                                        fontSize = 11.sp,
+                                        color = WaxSealRed,
+                                    )
+                                }
+                            }
+                        }
+
+                        if (friendsList.isEmpty()) {
+                            SteppedBox(
+                                modifier = Modifier.fillMaxWidth(),
+                                backgroundColor = TheirBubbleFill,
                                 borderColor = MothDivider,
-                                textColor = TheirBubbleText,
-                            )
+                                cutSize = 4.dp,
+                            ) {
+                                Box(
+                                    modifier = Modifier.fillMaxWidth().padding(20.dp),
+                                    contentAlignment = Alignment.Center,
+                                ) {
+                                    Text(
+                                        text = "no friends added yet",
+                                        fontFamily = PixelifySans,
+                                        fontSize = 12.sp,
+                                        color = MutedText,
+                                    )
+                                }
+                            }
+                        } else {
+                            Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                friendsList.forEach { friend ->
+                                    val isOnline = state.isContactOnline(friend.name)
+                                    SteppedBox(
+                                        modifier = Modifier
+                                            .fillMaxWidth()
+                                            .clickable { onOpenChat(friend.name) }
+                                            .testTag("friend_row_${friend.name}"),
+                                        backgroundColor = TheirBubbleFill,
+                                        borderColor = TheirBubbleBorder,
+                                        cutSize = 3.dp,
+                                        borderWidth = 1.dp,
+                                    ) {
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .padding(horizontal = 12.dp, vertical = 10.dp),
+                                            verticalAlignment = Alignment.CenterVertically,
+                                            horizontalArrangement = Arrangement.spacedBy(10.dp),
+                                        ) {
+                                            UserAvatar(
+                                                avatarPath = friend.avatarLocalPath,
+                                                color = friend.avatarColor,
+                                                size = 36.dp,
+                                            )
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = "@${friend.name}",
+                                                    fontFamily = PixelifySans,
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 14.sp,
+                                                    color = TheirBubbleText,
+                                                )
+                                                Row(
+                                                    verticalAlignment = Alignment.CenterVertically,
+                                                    horizontalArrangement = Arrangement.spacedBy(5.dp),
+                                                ) {
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .size(6.dp)
+                                                            .background(if (isOnline) SecureGreen else MutedText),
+                                                    )
+                                                    Text(
+                                                        text = if (isOnline) "active" else "offline",
+                                                        fontFamily = PixelifySans,
+                                                        fontSize = 11.sp,
+                                                        color = if (isOnline) SecureGreen else MutedText,
+                                                    )
+                                                }
+                                            }
+                                            Text(
+                                                text = "chat",
+                                                fontFamily = PixelifySans,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 12.sp,
+                                                color = LanternAmber,
+                                            )
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
                 }
@@ -634,7 +1307,108 @@ fun MothProfileView(
                 }
             }
         }
+
+        // Interactive Avatar Cropper Dialog
+        pendingAvatarCropUri?.let { cropUri ->
+            ImageCropDialog(
+                imageUri = cropUri,
+                title = "crop avatar",
+                outputSizePx = 300,
+                showLabelInput = false,
+                onConfirm = { croppedBitmap, _ ->
+                    pendingAvatarCropUri = null
+                    isUpdatingAvatar = true
+                    avatarError = null
+                    scope.launch {
+                        val res = state.updateCustomAvatarBitmap(croppedBitmap)
+                        res.onFailure { err ->
+                            avatarError = err.localizedMessage ?: "failed to set avatar photo"
+                        }
+                        if (!croppedBitmap.isRecycled) croppedBitmap.recycle()
+                        isUpdatingAvatar = false
+                    }
+                },
+                onDismiss = { pendingAvatarCropUri = null },
+            )
+        }
     }
+}
+
+@Composable
+private fun SettingsCategoryRow(
+    title: String,
+    subtitle: String,
+    testTag: String,
+    icon: @Composable () -> Unit,
+    onClick: () -> Unit,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(horizontal = 14.dp, vertical = 14.dp)
+            .testTag(testTag),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        SteppedBox(
+            modifier = Modifier.size(34.dp),
+            backgroundColor = MothBgDark,
+            borderColor = MothDivider,
+            cutSize = 2.dp,
+            borderWidth = 1.dp,
+        ) {
+            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                icon()
+            }
+        }
+        Column(modifier = Modifier.weight(1f)) {
+            Text(
+                text = title,
+                fontFamily = PixelifySans,
+                fontWeight = FontWeight.Bold,
+                fontSize = 14.sp,
+                color = TheirBubbleText,
+            )
+            Text(
+                text = subtitle,
+                fontFamily = PixelifySans,
+                fontSize = 11.sp,
+                color = MutedText,
+            )
+        }
+        PixelChevronRightIcon(tint = MutedText, modifier = Modifier.size(14.dp))
+    }
+}
+
+@Composable
+private fun StorageMetricRow(label: String, value: String) {
+    Row(
+        modifier = Modifier.fillMaxWidth(),
+        horizontalArrangement = Arrangement.SpaceBetween,
+    ) {
+        Text(
+            text = label,
+            fontFamily = PixelifySans,
+            fontSize = 12.sp,
+            color = MutedText,
+        )
+        Text(
+            text = value,
+            fontFamily = PixelifySans,
+            fontWeight = FontWeight.Bold,
+            fontSize = 12.sp,
+            color = TheirBubbleText,
+        )
+    }
+}
+
+private fun formatStorageBytes(bytes: Long): String {
+    if (bytes < 1024L) return "$bytes B"
+    val kb = bytes / 1024.0
+    if (kb < 1024.0) return "%.1f KB".format(kb)
+    val mb = kb / 1024.0
+    return "%.2f MB".format(mb)
 }
 
 @Composable

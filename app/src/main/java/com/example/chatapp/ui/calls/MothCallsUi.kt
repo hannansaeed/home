@@ -9,24 +9,22 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
-import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
+import com.example.chatapp.ui.components.PixelArrowInIcon
+import com.example.chatapp.ui.components.PixelArrowOutIcon
 import com.example.chatapp.ui.components.PixelLantern
 import com.example.chatapp.ui.components.PixelMicIcon
 import com.example.chatapp.ui.components.PixelPhoneIcon
-import com.example.chatapp.ui.components.PixelSearchIcon
 import com.example.chatapp.ui.components.PixelSpeakerIcon
 import com.example.chatapp.ui.components.PixelStarfield
 import com.example.chatapp.ui.components.UserAvatar
@@ -38,11 +36,12 @@ import com.example.chatapp.ui.theme.*
 import kotlinx.coroutines.delay
 
 @Composable
-fun CallHistoryEmptyPage(state: MothState) {
+fun CallHistoryEmptyPage(
+    state: MothState,
+    searchQuery: String = "",
+) {
     val context = LocalContext.current
-    var searchQuery by remember { mutableStateOf("") }
     var filterMode by remember { mutableStateOf("all") } // all | missed | incoming | outgoing
-    var dialHandle by remember { mutableStateOf("") }
     var callError by remember { mutableStateOf<String?>(null) }
 
     var pendingDialPeer by remember { mutableStateOf<String?>(null) }
@@ -123,132 +122,20 @@ fun CallHistoryEmptyPage(state: MothState) {
                 PixelLantern(isLit = true)
             }
 
-            // Quick Call Dialer Card
-            SteppedBox(
-                modifier = Modifier.fillMaxWidth(),
-                backgroundColor = MothHeaderBg,
-                borderColor = TheirBubbleBorder,
-                cutSize = 4.dp,
-            ) {
-                Column(
-                    modifier = Modifier.padding(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
+            if (callError != null) {
+                SteppedBox(
+                    modifier = Modifier.fillMaxWidth(),
+                    backgroundColor = MothHeaderBg,
+                    borderColor = WaxSealRed,
+                    cutSize = 3.dp,
                 ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        SteppedBox(
-                            modifier = Modifier
-                                .weight(1f)
-                                .height(38.dp),
-                            backgroundColor = MothBgDark,
-                            borderColor = MothDivider,
-                            cutSize = 3.dp,
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(horizontal = 10.dp),
-                                contentAlignment = Alignment.CenterStart,
-                            ) {
-                                if (dialHandle.isEmpty()) {
-                                    Text(
-                                        text = "enter handle to call...",
-                                        fontFamily = PixelifySans,
-                                        fontSize = 12.sp,
-                                        color = PlaceholderText,
-                                    )
-                                }
-                                BasicTextField(
-                                    value = dialHandle,
-                                    onValueChange = { dialHandle = it; callError = null },
-                                    textStyle = TextStyle(
-                                        fontFamily = PixelifySans,
-                                        fontSize = 13.sp,
-                                        color = TheirBubbleText,
-                                    ),
-                                    cursorBrush = SolidColor(LanternAmber),
-                                    singleLine = true,
-                                    modifier = Modifier
-                                        .fillMaxWidth()
-                                        .testTag("call_dial_input"),
-                                )
-                            }
-                        }
-
-                        SteppedButton(
-                            text = "call",
-                            onClick = {
-                                if (dialHandle.isNotBlank()) initiateVoiceCall(dialHandle.trim())
-                            },
-                            backgroundColor = MothBgDark,
-                            borderColor = LanternAmber,
-                            textColor = LanternAmber,
-                            cutSize = 3.dp,
-                            leadingIcon = {
-                                PixelPhoneIcon(tint = LanternAmber, modifier = Modifier.size(16.dp))
-                            },
-                            modifier = Modifier.testTag("dial_voice_button"),
-                        )
-                    }
-
-                    if (callError != null) {
-                        Text(
-                            text = callError ?: "",
-                            fontFamily = PixelifySans,
-                            fontSize = 11.sp,
-                            color = WaxSealRed,
-                        )
-                    }
-                }
-            }
-
-            // Search Call History
-            SteppedBox(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .height(38.dp),
-                backgroundColor = MothHeaderBg,
-                borderColor = MothDivider,
-                cutSize = 3.dp,
-            ) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    PixelSearchIcon(tint = MutedText, modifier = Modifier.size(18.dp))
-                    Box(
-                        modifier = Modifier.weight(1f),
-                        contentAlignment = Alignment.CenterStart,
-                    ) {
-                        if (searchQuery.isEmpty()) {
-                            Text(
-                                text = "search call history...",
-                                fontFamily = PixelifySans,
-                                fontSize = 12.sp,
-                                color = PlaceholderText,
-                            )
-                        }
-                        BasicTextField(
-                            value = searchQuery,
-                            onValueChange = { searchQuery = it },
-                            textStyle = TextStyle(
-                                fontFamily = PixelifySans,
-                                fontSize = 13.sp,
-                                color = TheirBubbleText,
-                            ),
-                            cursorBrush = SolidColor(LanternAmber),
-                            singleLine = true,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .testTag("call_history_search_input"),
-                        )
-                    }
+                    Text(
+                        text = callError ?: "",
+                        fontFamily = PixelifySans,
+                        fontSize = 11.sp,
+                        color = WaxSealRed,
+                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                    )
                 }
             }
 
@@ -328,11 +215,6 @@ private fun CallLogRow(
     onCallVoice: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    val dirArrow = when (log.direction) {
-        CallDirection.INCOMING -> "↙"
-        CallDirection.OUTGOING -> "↗"
-        CallDirection.MISSED -> "✕"
-    }
     val dirColor = when (log.direction) {
         CallDirection.INCOMING -> SecureGreen
         CallDirection.OUTGOING -> LanternAmber
@@ -373,14 +255,23 @@ private fun CallLogRow(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
+                    when (log.direction) {
+                        CallDirection.INCOMING -> PixelArrowInIcon(tint = dirColor, modifier = Modifier.size(12.dp))
+                        CallDirection.OUTGOING -> PixelArrowOutIcon(tint = dirColor, modifier = Modifier.size(12.dp))
+                        CallDirection.MISSED -> Text(
+                            text = "missed",
+                            fontFamily = PixelifySans,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = dirColor,
+                        )
+                    }
                     Text(
-                        text = dirArrow,
-                        fontSize = 12.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = dirColor,
-                    )
-                    Text(
-                        text = "voice • $durationLabel • ${log.timeLabel}",
+                        text = if (log.direction == CallDirection.MISSED) {
+                            "voice • ${log.timeLabel}"
+                        } else {
+                            "voice • $durationLabel • ${log.timeLabel}"
+                        },
                         fontFamily = PixelifySans,
                         fontSize = 11.sp,
                         color = if (log.direction == CallDirection.MISSED) WaxSealRed else MutedText,
@@ -471,21 +362,27 @@ fun ActiveCallOverlay(state: MothState) {
                 fontSize = 22.sp,
                 color = LanternAmber,
             )
+            val rtcState = state.webRtcManager.connectionState
             val statusLine = when {
                 call.status == "RINGING" && call.isCaller -> "ringing..."
                 call.status == "RINGING" && !call.isCaller -> "incoming voice call"
+                rtcState == "failed" -> "connection failed"
                 else -> {
                     val m = elapsedSec / 60
                     val s = elapsedSec % 60
                     val timerStr = "%02d:%02d".format(m, s)
-                    "${state.webRtcManager.connectionState} • $timerStr"
+                    "$rtcState • $timerStr"
                 }
             }
             Text(
                 text = statusLine,
                 fontFamily = PixelifySans,
                 fontSize = 14.sp,
-                color = if (call.status == "ACTIVE") SecureGreen else MutedText,
+                color = when {
+                    rtcState == "failed" -> WaxSealRed
+                    call.status == "ACTIVE" -> SecureGreen
+                    else -> MutedText
+                },
             )
         }
 
@@ -500,7 +397,7 @@ fun ActiveCallOverlay(state: MothState) {
         ) {
             if (!call.isCaller && call.status == "RINGING") {
                 SteppedButton(
-                    text = "✕ decline",
+                    text = "decline",
                     onClick = { state.declineOrEndCall() },
                     backgroundColor = WaxSealRed,
                     borderColor = WaxSealDarkEdge,
@@ -508,7 +405,7 @@ fun ActiveCallOverlay(state: MothState) {
                     modifier = Modifier.testTag("decline_call_button"),
                 )
                 SteppedButton(
-                    text = "✓ accept",
+                    text = "accept",
                     onClick = { acceptWithPermissions() },
                     backgroundColor = SecureGreen,
                     borderColor = TheirBubbleBorder,
@@ -549,7 +446,7 @@ fun ActiveCallOverlay(state: MothState) {
                     modifier = Modifier.testTag("call_speaker_button"),
                 )
                 SteppedButton(
-                    text = "✕ end",
+                    text = "end",
                     onClick = { state.declineOrEndCall() },
                     backgroundColor = WaxSealRed,
                     borderColor = WaxSealDarkEdge,

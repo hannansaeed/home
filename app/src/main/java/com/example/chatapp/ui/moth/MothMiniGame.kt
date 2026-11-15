@@ -1,5 +1,7 @@
 package com.example.chatapp.ui.moth
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -12,65 +14,212 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.chatapp.ui.components.PixelBackArrowIcon
 import com.example.chatapp.ui.theme.*
 import kotlin.random.Random
 
-private enum class MiniGameTab(val label: String) {
-    WORDLE("wordle"),
-    TOD("tod"),
-    UNRAVEL("unravel"),
+private enum class MiniGameTab(
+    val label: String,
+    val title: String,
+    val accent: Color,
+) {
+    WORDLE("wordle", "wordle", SecureGreen),
+    TOD("tod", "truth or dare", WaxSealRed),
+    UNRAVEL("unravel", "unravel", LanternAmber),
+}
+
+@Composable
+private fun PixelGameTileLogo(
+    game: MiniGameTab,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier.size(64.dp)) {
+        val u = size.width / 16f
+        when (game) {
+            MiniGameTab.WORDLE -> {
+                // 3x3 pixel Wordle letter blocks in emerald, amber & slate
+                val colors = listOf(
+                    listOf(SecureGreen, MothDivider, LanternAmber),
+                    listOf(LanternAmber, SecureGreen, MothDivider),
+                    listOf(SecureGreen, SecureGreen, SecureGreen),
+                )
+                for (r in 0..2) {
+                    for (c in 0..2) {
+                        val x = (1.5f + c * 4.5f) * u
+                        val y = (1.5f + r * 4.5f) * u
+                        drawRect(colors[r][c], Offset(x, y), Size(3.6f * u, 3.6f * u))
+                        drawRect(Color(0x55FFFFFF), Offset(x + 0.6f * u, y + 0.6f * u), Size(1.0f * u, 1.0f * u))
+                    }
+                }
+            }
+            MiniGameTab.TOD -> {
+                // Pixel flame-bottle / fate wheel diamond
+                val red = WaxSealRed
+                val dark = WaxSealDarkEdge
+                val gold = LanternAmber
+                drawRect(dark, Offset(6f * u, 1f * u), Size(4f * u, 14f * u))
+                drawRect(dark, Offset(4f * u, 3f * u), Size(8f * u, 10f * u))
+                drawRect(dark, Offset(2f * u, 5f * u), Size(12f * u, 6f * u))
+                drawRect(red, Offset(6f * u, 2f * u), Size(4f * u, 12f * u))
+                drawRect(red, Offset(4f * u, 4f * u), Size(8f * u, 8f * u))
+                drawRect(red, Offset(3f * u, 6f * u), Size(10f * u, 4f * u))
+                // Pixel question/flame spark center
+                drawRect(gold, Offset(7f * u, 4f * u), Size(2f * u, 5f * u))
+                drawRect(gold, Offset(7f * u, 10.5f * u), Size(2f * u, 1.8f * u))
+            }
+            MiniGameTab.UNRAVEL -> {
+                // Pixel scrambled letter tiles cascading
+                val gold = LanternAmber
+                val glow = LanternGlow
+                val slate = TheirBubbleBorder
+                drawRect(slate, Offset(1.5f * u, 2.5f * u), Size(5f * u, 5f * u))
+                drawRect(gold, Offset(2.2f * u, 3.2f * u), Size(3.6f * u, 3.6f * u))
+                drawRect(MothBgDark, Offset(3.4f * u, 4.2f * u), Size(1.2f * u, 1.8f * u))
+
+                drawRect(slate, Offset(9.5f * u, 1.5f * u), Size(5f * u, 5f * u))
+                drawRect(glow, Offset(10.2f * u, 2.2f * u), Size(3.6f * u, 3.6f * u))
+                drawRect(MothBgDark, Offset(11.3f * u, 3.1f * u), Size(1.4f * u, 1.8f * u))
+
+                drawRect(slate, Offset(5.5f * u, 9.5f * u), Size(5f * u, 5f * u))
+                drawRect(gold, Offset(6.2f * u, 10.2f * u), Size(3.6f * u, 3.6f * u))
+                drawRect(MothBgDark, Offset(7.2f * u, 11.2f * u), Size(1.6f * u, 1.6f * u))
+
+                // Connector pixel dashes
+                drawRect(gold, Offset(7.2f * u, 5.2f * u), Size(1.4f * u, 1.4f * u))
+                drawRect(gold, Offset(8.0f * u, 7.2f * u), Size(1.4f * u, 1.4f * u))
+            }
+        }
+    }
 }
 
 @Composable
 fun MothMiniGameView() {
-    var activeGame by remember { mutableStateOf(MiniGameTab.WORDLE) }
+    var activeGame by remember { mutableStateOf<MiniGameTab?>(null) }
+
+    BackHandler(enabled = activeGame != null) {
+        activeGame = null
+    }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(MothBgDark)
-            .padding(horizontal = 14.dp, vertical = 12.dp)
+            .padding(horizontal = 16.dp, vertical = 14.dp)
             .testTag("games_hub"),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        // Stepped Game Switcher (Wordle, TOD, Unravel)
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            MiniGameTab.entries.forEach { tab ->
-                val selected = activeGame == tab
-                SteppedButton(
-                    text = tab.label,
-                    onClick = { activeGame = tab },
-                    backgroundColor = if (selected) MyBubbleFill else MothHeaderBg,
-                    borderColor = if (selected) MyBubbleBorder else TheirBubbleBorder,
-                    textColor = if (selected) MyBubbleText else TheirBubbleText,
-                    cutSize = 3.dp,
+        val current = activeGame
+        if (current == null) {
+            Text(
+                text = "midnight arcade",
+                fontFamily = PixelifySans,
+                fontWeight = FontWeight.Bold,
+                fontSize = 18.sp,
+                color = LanternAmber,
+            )
+
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxWidth()
+                    .verticalScroll(rememberScrollState()),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                MiniGameTab.entries.chunked(2).forEach { rowGames ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        rowGames.forEach { game ->
+                            SteppedBox(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .aspectRatio(1f)
+                                    .clickable { activeGame = game }
+                                    .testTag("game_tab_${game.label}"),
+                                backgroundColor = MothHeaderBg,
+                                borderColor = game.accent,
+                                cutSize = 5.dp,
+                                borderWidth = 2.dp,
+                            ) {
+                                Column(
+                                    modifier = Modifier
+                                        .fillMaxSize()
+                                        .padding(14.dp),
+                                    verticalArrangement = Arrangement.Center,
+                                    horizontalAlignment = Alignment.CenterHorizontally,
+                                ) {
+                                    PixelGameTileLogo(game = game)
+                                    Spacer(modifier = Modifier.height(14.dp))
+                                    Text(
+                                        text = game.title,
+                                        fontFamily = PixelifySans,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 15.sp,
+                                        color = TheirBubbleText,
+                                        textAlign = TextAlign.Center,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                    )
+                                }
+                            }
+                        }
+                        if (rowGames.size == 1) {
+                            Spacer(modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+            }
+        } else {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                SteppedBox(
                     modifier = Modifier
-                        .weight(1f)
-                        .testTag("game_tab_${tab.label}"),
+                        .size(38.dp)
+                        .clickable { activeGame = null }
+                        .testTag("game_back_button"),
+                    backgroundColor = MothHeaderBg,
+                    borderColor = LanternAmber,
+                    cutSize = 3.dp,
+                    borderWidth = 1.dp,
+                ) {
+                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                        PixelBackArrowIcon(tint = LanternAmber, modifier = Modifier.size(22.dp))
+                    }
+                }
+                Text(
+                    text = current.title,
+                    fontFamily = PixelifySans,
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 17.sp,
+                    color = LanternAmber,
                 )
             }
-        }
 
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .weight(1f),
-        ) {
-            when (activeGame) {
-                MiniGameTab.WORDLE -> WordleGame()
-                MiniGameTab.TOD -> TruthOrDareGame()
-                MiniGameTab.UNRAVEL -> UnravelGame()
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .weight(1f),
+            ) {
+                when (current) {
+                    MiniGameTab.WORDLE -> WordleGame()
+                    MiniGameTab.TOD -> TruthOrDareGame()
+                    MiniGameTab.UNRAVEL -> UnravelGame()
+                }
             }
         }
     }
@@ -733,7 +882,7 @@ private fun TruthOrDareGame() {
                 )
             }
             SteppedButton(
-                text = "✦ RANDOM SPIN",
+                text = "random spin",
                 onClick = {
                     drawPrompt(if (Random.nextBoolean()) "TRUTH" else "DARE")
                 },
@@ -758,7 +907,7 @@ private fun TruthOrDareGame() {
                     cutSize = 4.dp,
                 )
                 SteppedButton(
-                    text = "done ✓",
+                    text = "done",
                     onClick = { nextTurn(didComplete = true) },
                     backgroundColor = SecureGreen,
                     borderColor = Color(0xFF4CA877),
@@ -1180,7 +1329,7 @@ private fun UnravelGame() {
         // Game Controls
         if (solved) {
             SteppedButton(
-                text = "next puzzle ➜",
+                text = "next puzzle",
                 onClick = { loadNewPuzzle() },
                 backgroundColor = MyBubbleFill,
                 borderColor = MyBubbleBorder,

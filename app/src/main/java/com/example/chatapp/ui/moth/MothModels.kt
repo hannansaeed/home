@@ -24,6 +24,7 @@ enum class ViewOnceStatus {
 
 enum class AttachmentType {
     PHOTO,
+    VIDEO,
     FILE,
     STICKER,
     VOICE
@@ -49,6 +50,13 @@ data class PendingAttachment(
     val audioDurationSec: Int = 0,
 )
 
+data class StorageStats(
+    val mediaBytes: Long = 0L,
+    val messageCount: Int = 0,
+    val chatCount: Int = 0,
+    val callLogCount: Int = 0,
+)
+
 data class MothSticker(
     val id: String,
     val label: String,
@@ -69,6 +77,7 @@ data class UserProfileDetails(
     val statusLabel: String,
     val joinedLabel: String,
     val localMessageCount: Int,
+    val bio: String = "",
 )
 
 data class MothMessage(
@@ -98,10 +107,12 @@ data class MothMessage(
     val isEdited: Boolean = false,
     val isDeleted: Boolean = false,
     val isPinned: Boolean = false,
+    val isStarred: Boolean = false,
     val status: MessageStatus = MessageStatus.SENT,
     val sentAt: Long = 0L,
     val deliveredAt: Long = 0L,
     val readAt: Long = 0L,
+    val listenedAt: Long = 0L,
 )
 
 data class MothConversation(
@@ -120,6 +131,14 @@ data class MothConversation(
     val groupIcon: String = "🏮",
     val admins: List<String> = emptyList(),
     val members: List<String> = emptyList(),
+    val isPinned: Boolean = false,
+    val isMuted: Boolean = false,
+)
+
+data class StarredMessageItem(
+    val chatId: String,
+    val chatName: String,
+    val message: MothMessage,
 )
 
 data class MothCallLog(

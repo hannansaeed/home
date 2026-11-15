@@ -8,6 +8,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.setValue
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -115,48 +116,172 @@ class VoiceNoteRecorder(
 }
 
 /**
- * Real MediaPlayer wrapper for playing voice notes with progress tracking.
+ * Real MediaPlayer wrapper for playing voice notes with pause/resume, progress tracking, and seeking.
  */
 class VoiceNotePlayer(private val scope: CoroutineScope) {
     private var player: MediaPlayer? = null
     private var progressJob: Job? = null
+    private val savedFractions = mutableStateMapOf<String, Float>()
 
     var playingMessageId by mutableStateOf<String?>(null)
         private set
+    var activeMessageId by mutableStateOf<String?>(null)
+        private set
+    var isPlaying by mutableStateOf(false)
+        private set
     var progress by mutableFloatStateOf(0f)
         private set
+    var currentPositionMs by mutableIntStateOf(0)
+        private set
+    var durationMs by mutableIntStateOf(0)
+        private set
 
-    fun togglePlay(messageId: String, localPath: String) {
-        if (playingMessageId == messageId) {
-            stop()
-            return
+    fun progressFor(messageId: String): Float {
+        return if (activeMessageId == messageId) progress else (savedFractions[messageId] ?: 0f)
+    }
+
+    fun positionMsFor(messageId: String, fallbackSec: Int): Int {
+        if (activeMessageId == messageId && durationMs > 0) return currentPositionMs
+        val saved = savedFractions[messageId] ?: return 0
+        return (saved * fallbackSec * 1000).toInt()
+    }
+
+    fun togglePlay(messageId: String, localPath: String): Boolean {
+        if (activeMessageId == messageId && player != null) {
+            val mp = player ?: return false
+            return try {
+                if (mp.isPlaying) {
+                    mp.pause()
+                    isPlaying = false
+                    playingMessageId = null
+                    progressJob?.cancel()
+                    false
+                } else {
+                    val dur = runCatching { mp.duration }.getOrDefault(0)
+                    val pos = runCatching { mp.currentPosition }.getOrDefault(0)
+                    if (dur > 0 && pos >= dur - 120) {
+                        mp.seekTo(0)
+                        currentPositionMs = 0
+                        progress = 0f
+                        savedFractions.remove(messageId)
+                    }
+                    mp.start()
+                    isPlaying = true
+                    playingMessageId = messageId
+                    startProgressLoop(messageId)
+                    true
+                }
+            } catch (_: Exception) {
+                stop()
+                false
+            }
         }
+
         stop()
         val file = File(localPath)
-        if (!file.exists()) return
-        try {
+        if (!file.exists()) return false
+        return try {
+            val saved = savedFractions[messageId] ?: 0f
+            val initialFraction = if (saved >= 0.95f) {
+                savedFractions.remove(messageId)
+                0f
+            } else {
+                saved.coerceIn(0f, 0.95f)
+            }
             val mp = MediaPlayer().apply {
                 setDataSource(file.absolutePath)
                 prepare()
+                val dur = duration.coerceAtLeast(1)
+                if (initialFraction > 0f) {
+                    seekTo((initialFraction * dur).toInt())
+                }
                 setOnCompletionListener {
-                    stop()
+                    scope.launch(Dispatchers.Main) {
+                        completePlayback(messageId)
+                    }
+                }
+                setOnErrorListener { _, _, _ ->
+                    scope.launch(Dispatchers.Main) {
+                        stop()
+                    }
+                    true
                 }
                 start()
             }
             player = mp
+            activeMessageId = messageId
             playingMessageId = messageId
-            progress = 0f
-
-            progressJob = scope.launch(Dispatchers.Main) {
-                while (isActive && playingMessageId == messageId) {
-                    val p = player ?: break
-                    if (p.isPlaying && p.duration > 0) {
-                        progress = (p.currentPosition.toFloat() / p.duration.toFloat()).coerceIn(0f, 1f)
-                    }
-                    delay(120L)
-                }
-            }
+            isPlaying = true
+            durationMs = mp.duration.coerceAtLeast(0)
+            currentPositionMs = mp.currentPosition.coerceAtLeast(0)
+            progress = if (durationMs > 0) (currentPositionMs.toFloat() / durationMs).coerceIn(0f, 1f) else initialFraction
+            startProgressLoop(messageId)
+            true
         } catch (_: Exception) {
+            stop()
+            false
+        }
+    }
+
+    fun seekTo(messageId: String, localPath: String, fraction: Float) {
+        val clamped = fraction.coerceIn(0f, 0.99f)
+        savedFractions[messageId] = clamped
+        if (activeMessageId == messageId && player != null) {
+            val mp = player ?: return
+            try {
+                val dur = mp.duration
+                if (dur > 0) {
+                    val targetMs = (clamped * dur).toInt().coerceIn(0, dur)
+                    mp.seekTo(targetMs)
+                    durationMs = dur
+                    currentPositionMs = targetMs
+                    progress = clamped
+                }
+            } catch (_: Exception) {}
+        } else {
+            val file = File(localPath)
+            if (file.exists() && activeMessageId == null) {
+                progress = clamped
+            }
+        }
+    }
+
+    private fun startProgressLoop(messageId: String) {
+        progressJob?.cancel()
+        progressJob = scope.launch(Dispatchers.Main) {
+            var stoppedTicks = 0
+            while (isActive && activeMessageId == messageId && isPlaying) {
+                val p = player ?: break
+                try {
+                    val currentlyPlaying = p.isPlaying
+                    val dur = p.duration
+                    val pos = p.currentPosition
+                    if (currentlyPlaying && dur > 0) {
+                        stoppedTicks = 0
+                        durationMs = dur
+                        currentPositionMs = pos
+                        val frac = (pos.toFloat() / dur.toFloat()).coerceIn(0f, 1f)
+                        progress = frac
+                        savedFractions[messageId] = frac
+                    } else if (!currentlyPlaying) {
+                        stoppedTicks++
+                        if (stoppedTicks >= 2 || (dur > 0 && pos >= dur - 80)) {
+                            completePlayback(messageId)
+                            break
+                        }
+                    }
+                } catch (_: Exception) {
+                    completePlayback(messageId)
+                    break
+                }
+                delay(60L)
+            }
+        }
+    }
+
+    private fun completePlayback(expectedMessageId: String) {
+        savedFractions.remove(expectedMessageId)
+        if (activeMessageId == expectedMessageId) {
             stop()
         }
     }
@@ -164,14 +289,22 @@ class VoiceNotePlayer(private val scope: CoroutineScope) {
     fun stop() {
         progressJob?.cancel()
         progressJob = null
-        try {
-            player?.stop()
-        } catch (_: Exception) {}
-        try {
-            player?.release()
-        } catch (_: Exception) {}
+        val oldPlayer = player
         player = null
+        if (oldPlayer != null) {
+            try { oldPlayer.setOnCompletionListener(null) } catch (_: Exception) {}
+            try { oldPlayer.setOnErrorListener(null) } catch (_: Exception) {}
+            try {
+                if (oldPlayer.isPlaying) oldPlayer.stop()
+            } catch (_: Exception) {}
+            try { oldPlayer.reset() } catch (_: Exception) {}
+            try { oldPlayer.release() } catch (_: Exception) {}
+        }
         playingMessageId = null
+        activeMessageId = null
+        isPlaying = false
         progress = 0f
+        currentPositionMs = 0
+        durationMs = 0
     }
 }

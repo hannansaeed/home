@@ -54,7 +54,7 @@ fun SettingsScreen(
                 ) {
                     PixelLantern(isLit = true)
                     Text(
-                        text = "moth hours",
+                        text = "farlight",
                         fontFamily = PixelifySans,
                         fontSize = 17.sp,
                         fontWeight = FontWeight.Bold,

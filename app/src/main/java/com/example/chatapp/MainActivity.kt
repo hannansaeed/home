@@ -2,12 +2,15 @@ package com.example.chatapp
 
 import android.Manifest
 import android.app.Activity
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color as AndroidColor
 import android.os.Build
 import android.os.Bundle
 import android.view.WindowManager
+import java.util.Calendar
 import androidx.activity.ComponentActivity
 import androidx.activity.SystemBarStyle
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -15,10 +18,18 @@ import androidx.activity.compose.setContent
 import androidx.activity.enableEdgeToEdge
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.FastOutSlowInEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
 import androidx.compose.animation.fadeOut
 import androidx.compose.animation.togetherWith
+import kotlinx.coroutines.delay
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.BasicTextField
@@ -38,11 +49,16 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import androidx.compose.ui.draw.alpha
+import androidx.compose.ui.draw.scale
 import com.example.chatapp.ui.auth.LoginScreen
 import com.example.chatapp.ui.calls.ActiveCallOverlay
 import com.example.chatapp.ui.chat.ChatScreen
 import com.example.chatapp.ui.chatlist.ChatListScreen
+import com.example.chatapp.ui.components.LargeHangingLantern
 import com.example.chatapp.ui.components.PixelLantern
+import com.example.chatapp.ui.components.PixelMoth
+import com.example.chatapp.ui.components.PixelStarfield
 import com.example.chatapp.ui.moth.MothState
 import com.example.chatapp.ui.theme.*
 import dagger.hilt.android.AndroidEntryPoint
@@ -75,13 +91,19 @@ class MainActivity : ComponentActivity() {
                     modifier = Modifier.fillMaxSize(),
                     color = MothBgDark,
                 ) {
-                    MothNavigationRoot(
+                    MothApp(
                         pendingChatTarget = pendingChatTarget,
                         onConsumedPendingChat = { pendingChatTarget = null },
                     )
                 }
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        val appCtx = applicationContext
+        Thread { syncDayNightAppIcon(appCtx) }.start()
     }
 
     override fun onNewIntent(intent: Intent) {
@@ -94,26 +116,105 @@ class MainActivity : ComponentActivity() {
     }
 }
 
+private fun syncDayNightAppIcon(context: Context) {
+    try {
+        val hour = Calendar.getInstance().get(Calendar.HOUR_OF_DAY)
+        val isDay = hour in 6..17
+        val pm = context.packageManager
+        val dayComponent = ComponentName(context.packageName, "com.example.chatapp.LauncherDay")
+        val nightComponent = ComponentName(context.packageName, "com.example.chatapp.LauncherNight")
+
+        val dayState = pm.getComponentEnabledSetting(dayComponent)
+        val nightState = pm.getComponentEnabledSetting(nightComponent)
+        val isDayActive = (dayState == PackageManager.COMPONENT_ENABLED_STATE_ENABLED) ||
+            (dayState == PackageManager.COMPONENT_ENABLED_STATE_DEFAULT &&
+                nightState != PackageManager.COMPONENT_ENABLED_STATE_ENABLED)
+
+        if (isDay == isDayActive) return
+
+        val toEnable = if (isDay) dayComponent else nightComponent
+        val toDisable = if (isDay) nightComponent else dayComponent
+        pm.setComponentEnabledSetting(
+            toEnable,
+            PackageManager.COMPONENT_ENABLED_STATE_ENABLED,
+            PackageManager.DONT_KILL_APP,
+        )
+        pm.setComponentEnabledSetting(
+            toDisable,
+            PackageManager.COMPONENT_ENABLED_STATE_DISABLED,
+            PackageManager.DONT_KILL_APP,
+        )
+    } catch (_: Exception) {
+    }
+}
+
 @Composable
-fun MothNavigationRoot(
+fun MothApp(
     pendingChatTarget: String? = null,
     onConsumedPendingChat: () -> Unit = {},
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    var showOpeningSplash by remember { mutableStateOf(true) }
+    var mothState by remember { mutableStateOf<MothState?>(null) }
+
+    // Concurrently initialize MothState off the main thread so Frame 0 draws the lantern splash immediately
+    LaunchedEffect(Unit) {
+        val state = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+            MothState(context, scope)
+        }
+        mothState = state
+    }
+
+    // Preserve the exact 1450ms lantern animation timing while waiting for concurrent state
+    LaunchedEffect(Unit) {
+        delay(1450L)
+        while (mothState == null) {
+            delay(50L)
+        }
+        showOpeningSplash = false
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
+        val activeState = mothState
+        if (activeState != null) {
+            MothNavigationRoot(
+                mothState = activeState,
+                pendingChatTarget = pendingChatTarget,
+                onConsumedPendingChat = onConsumedPendingChat,
+            )
+        }
+
+        // Animated Opening Splash displays immediately on cold start and sits on top until finished
+        AnimatedVisibility(
+            visible = showOpeningSplash,
+            exit = fadeOut(animationSpec = tween(350)),
+        ) {
+            MothOpeningSplash()
+        }
+    }
+}
+
+@Composable
+fun MothNavigationRoot(
+    mothState: MothState,
+    pendingChatTarget: String? = null,
+    onConsumedPendingChat: () -> Unit = {},
+) {
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
-    val mothState = remember { MothState(context, scope) }
     var currentScreen by remember {
         mutableStateOf<MothScreen>(if (mothState.isLoggedIn) MothScreen.Home else MothScreen.Login)
     }
 
-    // Apply FLAG_SECURE dynamically based on user privacy preference
-    LaunchedEffect(mothState.screenshotBlockingEnabled) {
+    // Apply FLAG_SECURE dynamically based on privacy preference or active View-Once playback
+    LaunchedEffect(mothState.screenshotBlockingEnabled, mothState.isViewingViewOnce) {
         val window = (context as? Activity)?.window ?: return@LaunchedEffect
+        val secureRequired = mothState.screenshotBlockingEnabled || mothState.isViewingViewOnce
         val hasFlag = (window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE) != 0
-        if (mothState.screenshotBlockingEnabled && !hasFlag) {
+        if (secureRequired && !hasFlag) {
             window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-        } else if (!mothState.screenshotBlockingEnabled && hasFlag) {
+        } else if (!secureRequired && hasFlag) {
             window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
         }
     }
@@ -205,6 +306,77 @@ fun MothNavigationRoot(
         if (mothState.isLoggedIn && mothState.isAppLocked) {
             AppLockOverlay(
                 onUnlock = { pin -> mothState.unlockApp(pin) },
+            )
+        }
+    }
+}
+
+@Composable
+private fun MothOpeningSplash() {
+    var started by remember { mutableStateOf(false) }
+    LaunchedEffect(Unit) { started = true }
+
+    val lanternScale by animateFloatAsState(
+        targetValue = if (started) 1f else 0.92f,
+        animationSpec = tween(550, easing = FastOutSlowInEasing),
+        label = "lanternScale",
+    )
+    val pulseTransition = rememberInfiniteTransition(label = "splashPulse")
+    val glowAlpha by pulseTransition.animateFloat(
+        initialValue = 0.72f,
+        targetValue = 1f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(600, easing = FastOutSlowInEasing),
+            repeatMode = RepeatMode.Reverse,
+        ),
+        label = "glowAlpha",
+    )
+
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(MothBgDark)
+            .testTag("opening_splash"),
+        contentAlignment = Alignment.Center,
+    ) {
+        PixelStarfield()
+
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(16.dp),
+            modifier = Modifier.padding(32.dp),
+        ) {
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(24.dp),
+            ) {
+                PixelMoth(isAnimated = true)
+                Box(
+                    modifier = Modifier
+                        .scale(lanternScale)
+                        .alpha(glowAlpha),
+                ) {
+                    LargeHangingLantern()
+                }
+                PixelMoth(isAnimated = true)
+            }
+
+            Spacer(modifier = Modifier.height(8.dp))
+
+            Text(
+                text = "farlight",
+                fontFamily = PixelifySans,
+                fontWeight = FontWeight.Bold,
+                fontSize = 26.sp,
+                color = LanternAmber,
+                letterSpacing = 1.5.sp,
+            )
+
+            Text(
+                text = "private by default",
+                fontFamily = PixelifySans,
+                fontSize = 13.sp,
+                color = MutedText,
             )
         }
     }

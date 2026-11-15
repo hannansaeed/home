@@ -64,19 +64,37 @@ private fun PixelGameTileLogo(
                 }
             }
             MiniGameTab.TOD -> {
-                // Pixel flame-bottle / fate wheel diamond
-                val red = WaxSealRed
-                val dark = WaxSealDarkEdge
-                val gold = LanternAmber
-                drawRect(dark, Offset(6f * u, 1f * u), Size(4f * u, 14f * u))
-                drawRect(dark, Offset(4f * u, 3f * u), Size(8f * u, 10f * u))
-                drawRect(dark, Offset(2f * u, 5f * u), Size(12f * u, 6f * u))
-                drawRect(red, Offset(6f * u, 2f * u), Size(4f * u, 12f * u))
-                drawRect(red, Offset(4f * u, 4f * u), Size(8f * u, 8f * u))
-                drawRect(red, Offset(3f * u, 6f * u), Size(10f * u, 4f * u))
-                // Pixel question/flame spark center
-                drawRect(gold, Offset(7f * u, 4f * u), Size(2f * u, 5f * u))
-                drawRect(gold, Offset(7f * u, 10.5f * u), Size(2f * u, 1.8f * u))
+                // Pixel Truth-or-Dare spinning bottle with dual truth/dare spin arcs
+                val glass = Color(0xFF82D8A7)
+                val glassShade = Color(0xFF45A07A)
+                val cork = LanternAmber
+                val spark = WaxSealRed
+                val dark = MothBgDark
+
+                // Diagonal pixel bottle (bottom-left base to top-right neck)
+                // Bottle base (bottom-left)
+                drawRect(glassShade, Offset(2.5f * u, 9.5f * u), Size(4.0f * u, 4.0f * u))
+                drawRect(glass, Offset(3.0f * u, 9.0f * u), Size(3.5f * u, 3.5f * u))
+                // Mid body
+                drawRect(glassShade, Offset(5.0f * u, 7.0f * u), Size(4.0f * u, 4.0f * u))
+                drawRect(glass, Offset(5.5f * u, 6.5f * u), Size(3.5f * u, 3.5f * u))
+                // Shoulder highlight
+                drawRect(Color(0x55FFFFFF), Offset(4.0f * u, 9.5f * u), Size(1.2f * u, 1.2f * u))
+                drawRect(Color(0x55FFFFFF), Offset(6.2f * u, 7.2f * u), Size(1.2f * u, 1.2f * u))
+                // Bottle neck & cork (top-right)
+                drawRect(glass, Offset(8.5f * u, 4.5f * u), Size(2.5f * u, 2.5f * u))
+                drawRect(glassShade, Offset(10.0f * u, 3.5f * u), Size(2.0f * u, 2.0f * u))
+                drawRect(cork, Offset(11.5f * u, 2.0f * u), Size(2.2f * u, 2.2f * u))
+                drawRect(dark, Offset(4.8f * u, 9.5f * u), Size(1.0f * u, 1.0f * u))
+
+                // Pixel spin motion arcs (top-left amber arc & bottom-right crimson arc)
+                drawRect(cork, Offset(2.5f * u, 2.5f * u), Size(3.0f * u, 1.2f * u))
+                drawRect(cork, Offset(1.5f * u, 3.7f * u), Size(1.2f * u, 2.2f * u))
+                drawRect(cork, Offset(5.0f * u, 1.8f * u), Size(1.4f * u, 1.4f * u))
+
+                drawRect(spark, Offset(10.5f * u, 12.3f * u), Size(3.0f * u, 1.2f * u))
+                drawRect(spark, Offset(13.3f * u, 10.0f * u), Size(1.2f * u, 2.5f * u))
+                drawRect(spark, Offset(9.5f * u, 12.8f * u), Size(1.4f * u, 1.4f * u))
             }
             MiniGameTab.UNRAVEL -> {
                 // Pixel scrambled letter tiles cascading

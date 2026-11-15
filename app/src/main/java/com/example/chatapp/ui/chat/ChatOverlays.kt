@@ -1593,7 +1593,7 @@ fun ContactProfileOverlay(
                 }
                 "starred" -> {
                     if (starredMessages.isEmpty()) {
-                        item { EmptySharedCard("triple-tap any message to star it") }
+                        item { EmptySharedCard("hold a message and tap ★ to star it") }
                     } else {
                         items(starredMessages, key = { it.id }) { msg ->
                             val preview = msg.text.ifBlank {

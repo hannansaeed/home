@@ -46,6 +46,7 @@ class WebRtcCallManager(
     private var isSettingRemoteDescription = false
     @Volatile
     private var sessionEnded = false
+    private val hangupDelivered = java.util.concurrent.atomic.AtomicBoolean(false)
 
     var isMuted by mutableStateOf(false)
         private set
@@ -59,6 +60,18 @@ class WebRtcCallManager(
             block()
         } else {
             mainHandler.post(block)
+        }
+    }
+
+    fun prepareForNewCall(isCaller: Boolean) {
+        synchronized(iceLock) {
+            sessionEnded = false
+            hangupDelivered.set(false)
+        }
+        runOnMain {
+            isMuted = false
+            isSpeakerOn = false
+            connectionState = if (isCaller) "ringing" else "connecting"
         }
     }
 
@@ -85,6 +98,7 @@ class WebRtcCallManager(
         callId: String,
         onRemoteHangup: () -> Unit,
     ) {
+        prepareForNewCall(isCaller = true)
         pcExecutor.execute {
             setupSessionInternal(callId = callId, isCaller = true, onRemoteHangup = onRemoteHangup)
         }
@@ -95,6 +109,7 @@ class WebRtcCallManager(
         offerSdp: String,
         onRemoteHangup: () -> Unit,
     ) {
+        prepareForNewCall(isCaller = false)
         pcExecutor.execute {
             setupSessionInternal(
                 callId = callId,
@@ -103,6 +118,28 @@ class WebRtcCallManager(
                 onRemoteHangup = onRemoteHangup,
             )
         }
+    }
+
+    private fun updateCallDocWithRetry(
+        callId: String,
+        fields: Map<String, Any>,
+        retriesLeft: Int = 2,
+    ) {
+        if (sessionEnded) return
+        db.collection("call_sessions").document(callId)
+            .update(fields)
+            .addOnFailureListener {
+                if (!sessionEnded) {
+                    if (retriesLeft > 0) {
+                        mainHandler.postDelayed(
+                            { updateCallDocWithRetry(callId, fields, retriesLeft - 1) },
+                            450L
+                        )
+                    } else {
+                        runOnMain { connectionState = "failed" }
+                    }
+                }
+            }
     }
 
     private fun setupSessionInternal(
@@ -119,6 +156,7 @@ class WebRtcCallManager(
             isSettingRemoteDescription = false
             pendingIceCandidates.clear()
             sessionEnded = false
+            hangupDelivered.set(false)
         }
         runOnMain {
             isMuted = false
@@ -127,26 +165,17 @@ class WebRtcCallManager(
         acquireCommunicationAudioFocus()
         setSpeakerphone(false)
 
-        val pcFactory = factory ?: return
+        val pcFactory = factory ?: run {
+            runOnMain { connectionState = "failed" }
+            return
+        }
         val iceServers = listOf(
             PeerConnection.IceServer.builder("stun:stun.l.google.com:19302").createIceServer(),
             PeerConnection.IceServer.builder("stun:stun1.l.google.com:19302").createIceServer(),
             PeerConnection.IceServer.builder("stun:stun2.l.google.com:19302").createIceServer(),
             PeerConnection.IceServer.builder("stun:stun3.l.google.com:19302").createIceServer(),
             PeerConnection.IceServer.builder("stun:stun4.l.google.com:19302").createIceServer(),
-            PeerConnection.IceServer.builder("stun:stun.relay.metered.ca:80").createIceServer(),
-            PeerConnection.IceServer.builder("turn:openrelay.metered.ca:80")
-                .setUsername("openrelayproject")
-                .setPassword("openrelayproject")
-                .createIceServer(),
-            PeerConnection.IceServer.builder("turn:openrelay.metered.ca:443")
-                .setUsername("openrelayproject")
-                .setPassword("openrelayproject")
-                .createIceServer(),
-            PeerConnection.IceServer.builder("turns:openrelay.metered.ca:443?transport=tcp")
-                .setUsername("openrelayproject")
-                .setPassword("openrelayproject")
-                .createIceServer(),
+            PeerConnection.IceServer.builder("stun:stun.cloudflare.com:3478").createIceServer(),
         )
         val rtcConfig = PeerConnection.RTCConfiguration(iceServers).apply {
             sdpSemantics = PeerConnection.SdpSemantics.UNIFIED_PLAN
@@ -154,10 +183,19 @@ class WebRtcCallManager(
             rtcpMuxPolicy = PeerConnection.RtcpMuxPolicy.REQUIRE
             tcpCandidatePolicy = PeerConnection.TcpCandidatePolicy.ENABLED
             continualGatheringPolicy = PeerConnection.ContinualGatheringPolicy.GATHER_CONTINUALLY
+            iceCandidatePoolSize = 2
         }
 
         val candidatesCollection = if (isCaller) "callerCandidates" else "calleeCandidates"
         val peerCandidatesCollection = if (isCaller) "calleeCandidates" else "callerCandidates"
+
+        fun notifyHangupOnce() {
+            if (hangupDelivered.compareAndSet(false, true)) {
+                runOnMain { onRemoteHangup() }
+            }
+        }
+
+        var iceRestartedOnce = false
 
         val pc = pcFactory.createPeerConnection(rtcConfig, object : PeerConnection.Observer {
             override fun onIceCandidate(candidate: IceCandidate?) {
@@ -182,31 +220,71 @@ class WebRtcCallManager(
             }
 
             override fun onIceConnectionChange(newState: PeerConnection.IceConnectionState?) {
-                val mapped = when (newState) {
-                    PeerConnection.IceConnectionState.CHECKING -> "connecting"
+                when (newState) {
+                    PeerConnection.IceConnectionState.CHECKING -> {
+                        runOnMain {
+                            if (connectionState != "connected") connectionState = "connecting"
+                        }
+                    }
                     PeerConnection.IceConnectionState.CONNECTED,
-                    PeerConnection.IceConnectionState.COMPLETED -> "connected"
-                    PeerConnection.IceConnectionState.DISCONNECTED -> "reconnecting"
-                    PeerConnection.IceConnectionState.CLOSED -> "ended"
-                    PeerConnection.IceConnectionState.FAILED -> "failed"
-                    else -> null
-                }
-                if (mapped != null) {
-                    runOnMain { connectionState = mapped }
+                    PeerConnection.IceConnectionState.COMPLETED -> {
+                        iceRestartedOnce = false
+                        runOnMain { connectionState = "connected" }
+                    }
+                    PeerConnection.IceConnectionState.DISCONNECTED -> {
+                        runOnMain {
+                            if (connectionState != "ended" && connectionState != "failed") {
+                                connectionState = "reconnecting"
+                            }
+                        }
+                    }
+                    PeerConnection.IceConnectionState.CLOSED -> {
+                        runOnMain { connectionState = "ended" }
+                    }
+                    PeerConnection.IceConnectionState.FAILED -> {
+                        if (!sessionEnded && !iceRestartedOnce) {
+                            iceRestartedOnce = true
+                            runOnMain { connectionState = "reconnecting" }
+                            pcExecutor.execute {
+                                if (!sessionEnded) {
+                                    try { peerConnection?.restartIce() } catch (_: Exception) {}
+                                }
+                            }
+                        } else {
+                            runOnMain { connectionState = "failed" }
+                        }
+                    }
+                    else -> Unit
                 }
             }
 
             override fun onConnectionChange(newState: PeerConnection.PeerConnectionState?) {
-                val mapped = when (newState) {
-                    PeerConnection.PeerConnectionState.CONNECTING -> "connecting"
-                    PeerConnection.PeerConnectionState.CONNECTED -> "connected"
-                    PeerConnection.PeerConnectionState.DISCONNECTED -> "reconnecting"
-                    PeerConnection.PeerConnectionState.FAILED -> "failed"
-                    PeerConnection.PeerConnectionState.CLOSED -> "ended"
-                    else -> null
-                }
-                if (mapped != null) {
-                    runOnMain { connectionState = mapped }
+                when (newState) {
+                    PeerConnection.PeerConnectionState.CONNECTING -> {
+                        runOnMain {
+                            if (connectionState != "connected") connectionState = "connecting"
+                        }
+                    }
+                    PeerConnection.PeerConnectionState.CONNECTED -> {
+                        iceRestartedOnce = false
+                        runOnMain { connectionState = "connected" }
+                    }
+                    PeerConnection.PeerConnectionState.DISCONNECTED -> {
+                        runOnMain {
+                            if (connectionState != "ended" && connectionState != "failed") {
+                                connectionState = "reconnecting"
+                            }
+                        }
+                    }
+                    PeerConnection.PeerConnectionState.FAILED -> {
+                        if (!sessionEnded && iceRestartedOnce) {
+                            runOnMain { connectionState = "failed" }
+                        }
+                    }
+                    PeerConnection.PeerConnectionState.CLOSED -> {
+                        runOnMain { connectionState = "ended" }
+                    }
+                    else -> Unit
                 }
             }
 
@@ -223,7 +301,10 @@ class WebRtcCallManager(
             override fun onRemoveStream(p0: MediaStream?) {}
             override fun onDataChannel(p0: DataChannel?) {}
             override fun onRenegotiationNeeded() {}
-        }) ?: return
+        }) ?: run {
+            runOnMain { connectionState = "failed" }
+            return
+        }
 
         peerConnection = pc
 
@@ -259,8 +340,7 @@ class WebRtcCallManager(
                         pc.setLocalDescription(object : SimpleSdpObserver() {
                             override fun onSetSuccess() {
                                 if (sessionEnded) return
-                                db.collection("call_sessions").document(callId)
-                                    .update("offerSdp", desc.description)
+                                updateCallDocWithRetry(callId, mapOf("offerSdp" to desc.description))
                             }
 
                             override fun onSetFailure(p0: String?) {
@@ -285,11 +365,13 @@ class WebRtcCallManager(
                         try {
                             val track = localAudioTrack
                             if (track != null) {
+                                track.setEnabled(!isMuted)
                                 val audioTransceiver = pc.transceivers.firstOrNull {
                                     it.mediaType == MediaStreamTrack.MediaType.MEDIA_TYPE_AUDIO
                                 }
                                 if (audioTransceiver != null) {
                                     audioTransceiver.direction = RtpTransceiver.RtpTransceiverDirection.SEND_RECV
+                                    audioTransceiver.sender.streams = listOf("moth_stream")
                                     audioTransceiver.sender.setTrack(track, false)
                                 } else {
                                     pc.addTrack(track, listOf("moth_stream"))
@@ -314,13 +396,13 @@ class WebRtcCallManager(
                                     pc.setLocalDescription(object : SimpleSdpObserver() {
                                         override fun onSetSuccess() {
                                             if (sessionEnded) return
-                                            db.collection("call_sessions").document(callId)
-                                                .update(
-                                                    mapOf(
-                                                        "answerSdp" to answer.description,
-                                                        "status" to "ACTIVE",
-                                                    )
+                                            updateCallDocWithRetry(
+                                                callId,
+                                                mapOf(
+                                                    "answerSdp" to answer.description,
+                                                    "status" to "ACTIVE",
                                                 )
+                                            )
                                         }
 
                                         override fun onSetFailure(p0: String?) {
@@ -380,12 +462,12 @@ class WebRtcCallManager(
             .addSnapshotListener { snap, error ->
                 if (error != null || sessionEnded) return@addSnapshotListener
                 if (snap == null || !snap.exists()) {
-                    runOnMain { onRemoteHangup() }
+                    notifyHangupOnce()
                     return@addSnapshotListener
                 }
                 val status = snap.getString("status") ?: ""
                 if (status == "ENDED" || status == "DECLINED" || status == "MISSED") {
-                    runOnMain { onRemoteHangup() }
+                    notifyHangupOnce()
                     return@addSnapshotListener
                 }
                 if (isCaller) {

@@ -1283,7 +1283,7 @@ fun ChatListScreen(
                             contentAlignment = Alignment.Center,
                         ) {
                             Text(
-                                text = "triple-tap any message to star it",
+                                text = "hold a message and tap ★ to star it",
                                 fontFamily = PixelifySans,
                                 fontSize = 12.sp,
                                 color = MutedText,

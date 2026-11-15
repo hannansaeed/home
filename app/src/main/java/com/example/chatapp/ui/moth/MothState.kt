@@ -22,10 +22,13 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.toArgb
 import androidx.core.app.NotificationCompat
+import androidx.core.app.Person
+import androidx.core.app.RemoteInput
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
 import com.example.chatapp.MainActivity
 import com.example.chatapp.R
+import java.lang.ref.WeakReference
 import com.example.chatapp.ui.components.decodeOrientedBitmap
 import com.example.chatapp.crypto.EcdhAesGcmCrypto
 import com.example.chatapp.data.local.ChatDatabaseProvider
@@ -172,6 +175,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
     }
 
     init {
+        activeInstanceRef = WeakReference(this)
         val savedUser = prefs.getString(KEY_LOGGED_IN_USER, "")?.trim()?.lowercase().orEmpty()
         val savedColorArgb = prefs.getInt(KEY_AVATAR_COLOR, Color(0xFFB8A9E8).toArgb())
         userAvatarColor = Color(savedColorArgb)
@@ -1075,35 +1079,50 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
             .whereEqualTo("callee", username)
             .addSnapshotListener { snap, error ->
                 if (error != null || snap == null || currentUsername != username) return@addSnapshotListener
-                val nowMs = System.currentTimeMillis()
-                val doc = snap.documents.firstOrNull { d ->
-                    val status = d.getString("status") ?: ""
-                    val created = d.getLong("createdAt") ?: nowMs
-                    status == "RINGING" && (nowMs - created) < 90_000L
-                }
-                if (doc != null && activeCall == null) {
+                val nowServerMs = serverNow()
+                val nowLocalMs = System.currentTimeMillis()
+                val doc = snap.documents
+                    .sortedByDescending { it.getLong("createdAt") ?: 0L }
+                    .firstOrNull { d ->
+                        val status = d.getString("status") ?: ""
+                        if (status != "RINGING") return@firstOrNull false
+                        val serverTs = d.getTimestamp("serverCreatedAt")?.toDate()?.time
+                        if (serverTs != null) {
+                            (nowServerMs - serverTs) in -60_000L..120_000L
+                        } else {
+                            // Local pending write or doc without server timestamp
+                            val created = d.getLong("createdAt") ?: nowLocalMs
+                            kotlin.math.abs(nowLocalMs - created) < 120_000L
+                        }
+                    }
+                if (doc != null) {
                     val callId = doc.id
-                    val caller = doc.getString("caller")?.lowercase().orEmpty()
+                    val caller = doc.getString("caller")?.removePrefix("@")?.lowercase().orEmpty()
                     val callTypeStr = doc.getString("callType") ?: CallType.VOICE.name
                     val callType = try { CallType.valueOf(callTypeStr) } catch (_: Exception) { CallType.VOICE }
                     val offerSdp = doc.getString("offerSdp")
-                    if (caller.isNotBlank() && !offerSdp.isNullOrBlank()) {
-                        activeCall = ActiveCallState(
-                            callId = callId,
-                            peerUsername = caller,
-                            callType = callType,
-                            isCaller = false,
-                            status = "RINGING",
-                            offerSdp = offerSdp,
-                        )
-                        if (!isAppInForeground) {
-                            showIncomingCallNotification(caller, callType)
+                    if (activeCall == null) {
+                        if (caller.isNotBlank() && !offerSdp.isNullOrBlank()) {
+                            activeCall = ActiveCallState(
+                                callId = callId,
+                                peerUsername = caller,
+                                callType = callType,
+                                isCaller = false,
+                                status = "RINGING",
+                                offerSdp = offerSdp,
+                            )
+                            if (!isAppInForeground) {
+                                showIncomingCallNotification(caller, callType)
+                            }
                         }
+                    } else if (activeCall?.callId == callId && activeCall?.offerSdp.isNullOrBlank() && !offerSdp.isNullOrBlank()) {
+                        activeCall = activeCall?.copy(offerSdp = offerSdp)
                     }
-                } else if (doc == null && activeCall?.isCaller == false && activeCall?.status == "RINGING") {
+                } else if (activeCall?.isCaller == false && activeCall?.status == "RINGING") {
                     val missedCall = activeCall
                     activeCall = null
                     if (missedCall != null) {
+                        cancelNotificationForTarget(missedCall.peerUsername)
                         recordCallLog(missedCall.peerUsername, missedCall.callType, CallDirection.MISSED, 0)
                     }
                 }
@@ -1283,7 +1302,11 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
 
         val existingMsg = mothDao.getMessage(localMsgId)
         if (existingMsg == null) {
-            val isCurrentlyOpen = activeChatId == chatId && isAppInForeground
+            val openId = activeChatId
+            val isCurrentlyOpen = isAppInForeground && openId != null && (
+                openId.equals(chatId, ignoreCase = true) ||
+                    (groupId == null && openId.equals(chatIdFor(username, sender), ignoreCase = true))
+                )
             val skew = receivedAt - timestamp
             val burnStart = if (msgType == MessageType.DISAPPEARING) {
                 if (skew in 0L..8_000L) timestamp else receivedAt
@@ -1364,14 +1387,22 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                 sendReceiptRelay(username, sender, listOf(msgId), receiptStatus)
             }
 
-            if (!isCurrentlyOpen && !updatedChat.isMuted) {
+            if (isCurrentlyOpen) {
+                cancelNotificationForTarget(chatId, groupId ?: sender)
+            } else if (!updatedChat.isMuted) {
                 val notifTitle = if (groupId != null) "${existingChat?.otherUsername ?: "group"} • $sender" else sender
                 val notifText = if (notificationPreviewsEnabled) {
                     buildNotificationBody(text, msgType, attachmentType, attachmentName)
                 } else {
                     "new encrypted whisper"
                 }
-                showIncomingMessageNotification(notifTitle, notifText, groupId ?: sender)
+                showIncomingMessageNotification(
+                    title = notifTitle,
+                    body = notifText,
+                    openTarget = groupId ?: sender,
+                    chatId = chatId,
+                    isCall = false,
+                )
             }
         }
     }
@@ -1504,7 +1535,22 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         }
     }
 
-    private fun showIncomingMessageNotification(title: String, body: String, openTarget: String, isCall: Boolean = false) {
+    private fun cancelNotificationForTarget(vararg targets: String) {
+        val nm = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+        targets.forEach { t ->
+            if (t.isNotBlank()) {
+                nm.cancel(t.hashCode())
+            }
+        }
+    }
+
+    private fun showIncomingMessageNotification(
+        title: String,
+        body: String,
+        openTarget: String,
+        chatId: String = "",
+        isCall: Boolean = false,
+    ) {
         if (isCall && !callNotificationsEnabled) return
         if (!isCall && !messageNotificationsEnabled) return
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
@@ -1517,31 +1563,66 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         val nm = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
         ensureNotificationChannel()
 
+        val notifId = (chatId.ifBlank { openTarget }).hashCode()
         val intent = Intent(appContext, MainActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
             putExtra("open_chat_user", openTarget)
         }
         val pendingIntent = PendingIntent.getActivity(
             appContext,
-            openTarget.hashCode(),
+            notifId,
             intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
         )
 
-        val notification = NotificationCompat.Builder(appContext, NOTIF_CHANNEL_ID)
+        val builder = NotificationCompat.Builder(appContext, NOTIF_CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_moth_notification)
             .setContentTitle(title)
             .setContentText(body)
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
             .setContentIntent(pendingIntent)
-            .build()
 
-        nm.notify(openTarget.hashCode(), notification)
+        if (!isCall && chatId.isNotBlank()) {
+            val mePerson = Person.Builder().setName("you").build()
+            val peerPerson = Person.Builder().setName(title).build()
+            builder.setStyle(
+                NotificationCompat.MessagingStyle(mePerson)
+                    .addMessage(body, System.currentTimeMillis(), peerPerson)
+            )
+            val remoteInput = RemoteInput.Builder(NotificationReplyReceiver.KEY_TEXT_REPLY)
+                .setLabel("reply")
+                .build()
+            val replyIntent = Intent(appContext, NotificationReplyReceiver::class.java).apply {
+                action = NotificationReplyReceiver.ACTION_REPLY
+                putExtra(NotificationReplyReceiver.EXTRA_CHAT_ID, chatId)
+                putExtra(NotificationReplyReceiver.EXTRA_OPEN_TARGET, openTarget)
+                putExtra(NotificationReplyReceiver.EXTRA_NOTIF_ID, notifId)
+                putExtra(NotificationReplyReceiver.EXTRA_SENDER_TITLE, title)
+                putExtra(NotificationReplyReceiver.EXTRA_INCOMING_BODY, body)
+            }
+            val replyPendingIntent = PendingIntent.getBroadcast(
+                appContext,
+                notifId xor 0x4D4F,
+                replyIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
+            )
+            val replyAction = NotificationCompat.Action.Builder(
+                R.drawable.ic_moth_notification,
+                "reply",
+                replyPendingIntent,
+            )
+                .addRemoteInput(remoteInput)
+                .setAllowGeneratedReplies(true)
+                .build()
+            builder.addAction(replyAction)
+        }
+
+        nm.notify(notifId, builder.build())
     }
 
     private fun showIncomingCallNotification(caller: String, callType: CallType) {
-        showIncomingMessageNotification("@$caller", "incoming voice call", caller, isCall = true)
+        showIncomingMessageNotification("@$caller", "incoming voice call", caller, chatId = "", isCall = true)
     }
 
     private fun startBurnMonitor(username: String) {
@@ -1792,17 +1873,21 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         val owner = currentUsername
         if (owner.isBlank()) return
 
+        val cleanTarget = idOrName.trim().removePrefix("@")
         val target = conversations.firstOrNull {
-            it.id == idOrName || it.name.equals(idOrName, ignoreCase = true)
+            it.id.equals(idOrName, ignoreCase = true) ||
+                it.id.equals(chatIdFor(owner, cleanTarget), ignoreCase = true) ||
+                it.name.equals(cleanTarget, ignoreCase = true)
         }
         val otherUser = target?.name?.lowercase()
-            ?: idOrName.substringAfter("::", idOrName).trim().lowercase()
+            ?: cleanTarget.substringAfter("::", cleanTarget).removePrefix("@").trim().lowercase()
         val chatId = target?.id ?: chatIdFor(owner, otherUser)
 
         activeChatId = chatId
         isContactTyping = false
         lastTypingSentAt = 0L
         lastTypingSentState = false
+        cancelNotificationForTarget(chatId, otherUser)
 
         startObservingLocalMessages(owner, chatId)
         ensureBurnMonitorRunning()
@@ -2757,6 +2842,50 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
     ) {
         val rawTrimmed = text.trim()
         if (rawTrimmed.isBlank() && attachment == null) return
+        if (currentUsername.isBlank()) return
+        ensureBurnMonitorRunning()
+        ioScope.launch {
+            dispatchMessageInternal(
+                chatId = chatId,
+                rawTrimmed = rawTrimmed,
+                type = type,
+                attachment = attachment,
+                replyTo = replyTo,
+                isForwarded = isForwarded,
+            )
+        }
+    }
+
+    suspend fun sendReplyFromNotificationAwait(chatId: String, replyText: String) {
+        val clean = replyText.trim()
+        val owner = currentUsername
+        if (clean.isBlank() || owner.isBlank()) return
+        withContext(Dispatchers.IO) {
+            crypto.initializeForUser(owner)
+            dispatchMessageInternal(
+                chatId = chatId,
+                rawTrimmed = clean,
+                type = MessageType.REGULAR,
+                attachment = null,
+                replyTo = null,
+                isForwarded = false,
+            )
+            mothDao.markChatRead(chatId)
+            val chatEntity = mothDao.getChat(chatId)
+            if (chatEntity != null) {
+                syncChatToCloud(chatEntity.copy(unreadCount = 0))
+            }
+        }
+    }
+
+    private suspend fun dispatchMessageInternal(
+        chatId: String,
+        rawTrimmed: String,
+        type: MessageType,
+        attachment: PendingAttachment?,
+        replyTo: MothMessage?,
+        isForwarded: Boolean,
+    ) {
         val sender = currentUsername
         if (sender.isBlank()) return
 
@@ -2803,105 +2932,82 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
             }
         }
 
-        ensureBurnMonitorRunning()
-        ioScope.launch {
-            try {
-                val chatEntity = mothDao.getChat(chatId)
-                val otherUser = chatEntity?.otherUsername
-                    ?: conversations.firstOrNull { it.id == chatId }?.name?.lowercase()
-                    ?: chatId.substringAfter("::", "")
-                if (otherUser.isBlank()) return@launch
-                val isGroup = chatEntity?.isGroup == true
+        try {
+            val chatEntity = mothDao.getChat(chatId)
+            val otherUser = chatEntity?.otherUsername
+                ?: conversations.firstOrNull { it.id == chatId }?.name?.lowercase()
+                ?: chatId.substringAfter("::", "")
+            if (otherUser.isBlank()) return
+            val isGroup = chatEntity?.isGroup == true
 
-                val msgEntity = MothMessageEntity(
-                    localId = localMsgIdFor(sender, msgId),
-                    id = msgId,
-                    ownerUsername = sender,
-                    chatId = chatId,
-                    senderUsername = sender,
-                    text = effectiveText,
-                    type = effectiveType.name,
-                    viewOnceStatus = ViewOnceStatus.UNOPENED.name,
-                    embersRemaining = 10,
-                    leaveTrace = leaveTrace,
-                    burnStartAt = if (effectiveType == MessageType.DISAPPEARING) now else 0L,
-                    time = timeStr,
-                    timestamp = now,
-                    attachmentType = attachment?.type?.name,
-                    attachmentName = attachment?.name,
-                    attachmentLocalPath = attachment?.localPath,
-                    attachmentMimeType = attachment?.mimeType,
-                    attachmentSizeBytes = attachment?.sizeBytes ?: 0L,
-                    audioDurationSec = attachment?.audioDurationSec ?: 0,
-                    replyToId = replyTo?.id,
-                    replyToSender = replyTo?.senderUsername?.ifBlank { if (replyTo.isMine) sender else otherUser },
-                    replyToPreview = replyPreview,
-                    isForwarded = isForwarded,
-                    status = if (otherUser == "support") MessageStatus.READ.name else MessageStatus.SENDING.name,
-                    sentAt = now,
-                )
-                mothDao.upsertMessage(msgEntity)
+            val msgEntity = MothMessageEntity(
+                localId = localMsgIdFor(sender, msgId),
+                id = msgId,
+                ownerUsername = sender,
+                chatId = chatId,
+                senderUsername = sender,
+                text = effectiveText,
+                type = effectiveType.name,
+                viewOnceStatus = ViewOnceStatus.UNOPENED.name,
+                embersRemaining = 10,
+                leaveTrace = leaveTrace,
+                burnStartAt = if (effectiveType == MessageType.DISAPPEARING) now else 0L,
+                time = timeStr,
+                timestamp = now,
+                attachmentType = attachment?.type?.name,
+                attachmentName = attachment?.name,
+                attachmentLocalPath = attachment?.localPath,
+                attachmentMimeType = attachment?.mimeType,
+                attachmentSizeBytes = attachment?.sizeBytes ?: 0L,
+                audioDurationSec = attachment?.audioDurationSec ?: 0,
+                replyToId = replyTo?.id,
+                replyToSender = replyTo?.senderUsername?.ifBlank { if (replyTo.isMine) sender else otherUser },
+                replyToPreview = replyPreview,
+                isForwarded = isForwarded,
+                status = if (otherUser == "support") MessageStatus.READ.name else MessageStatus.SENDING.name,
+                sentAt = now,
+            )
+            mothDao.upsertMessage(msgEntity)
 
-                val preview = buildPreviewText(
-                    text = effectiveText,
-                    type = effectiveType,
-                    attachmentType = attachment?.type?.name,
-                    attachmentName = attachment?.name,
-                )
-                val updatedChat = (chatEntity ?: MothChatEntity(
-                    id = chatId,
-                    ownerUsername = sender,
-                    otherUsername = otherUser,
-                    preview = preview,
-                    time = timeStr,
-                    avatarColorArgb = avatarColorForUsername(otherUser).toArgb().toLong(),
-                    unreadCount = 0,
-                    isLit = true,
-                    updatedAt = now,
-                )).copy(
-                    preview = preview,
-                    time = timeStr,
-                    isDisappearing = effectiveType == MessageType.DISAPPEARING,
-                    isViewOnce = effectiveType == MessageType.VIEW_ONCE,
-                    updatedAt = now,
-                )
-                mothDao.upsertChat(updatedChat)
-                syncChatToCloud(updatedChat)
+            val preview = buildPreviewText(
+                text = effectiveText,
+                type = effectiveType,
+                attachmentType = attachment?.type?.name,
+                attachmentName = attachment?.name,
+            )
+            val updatedChat = (chatEntity ?: MothChatEntity(
+                id = chatId,
+                ownerUsername = sender,
+                otherUsername = otherUser,
+                preview = preview,
+                time = timeStr,
+                avatarColorArgb = avatarColorForUsername(otherUser).toArgb().toLong(),
+                unreadCount = 0,
+                isLit = true,
+                updatedAt = now,
+            )).copy(
+                preview = preview,
+                time = timeStr,
+                isDisappearing = effectiveType == MessageType.DISAPPEARING,
+                isViewOnce = effectiveType == MessageType.VIEW_ONCE,
+                updatedAt = now,
+            )
+            mothDao.upsertChat(updatedChat)
+            syncChatToCloud(updatedChat)
 
-                if (otherUser == "support") {
-                    triggerSupportReply(sender, chatId, attachment != null)
-                } else if (isGroup) {
-                    val groupId = chatId.substringAfter("::")
-                    val members = jsonArrayToList(chatEntity?.membersJson ?: "[]").filter { it != sender }
-                    val groupKey = getOrFetchGroupKey(groupId, members + sender)
-                    for (member in members) {
-                        val relayDocId = "${msgId}_${member}"
-                        val payload = buildRelayPayload(
-                            msgId = msgId,
-                            sender = sender,
-                            recipient = member,
-                            groupId = groupId,
-                            text = effectiveText,
-                            type = effectiveType,
-                            leaveTrace = leaveTrace,
-                            timeStr = timeStr,
-                            timestamp = now,
-                            attachment = attachment,
-                            replyToId = msgEntity.replyToId,
-                            replyToSender = msgEntity.replyToSender,
-                            replyToPreview = msgEntity.replyToPreview,
-                            isForwarded = isForwarded,
-                            groupKey = groupKey,
-                        )
-                        db.collection("relay_messages").document(relayDocId).set(payload).await()
-                    }
-                    mothDao.updateMessageStatus(msgEntity.localId, MessageStatus.SENT.name, sentAt = System.currentTimeMillis())
-                } else {
+            if (otherUser == "support") {
+                triggerSupportReply(sender, chatId, attachment != null)
+            } else if (isGroup) {
+                val groupId = chatId.substringAfter("::")
+                val members = jsonArrayToList(chatEntity?.membersJson ?: "[]").filter { it != sender }
+                val groupKey = getOrFetchGroupKey(groupId, members + sender)
+                for (member in members) {
+                    val relayDocId = "${msgId}_${member}"
                     val payload = buildRelayPayload(
                         msgId = msgId,
                         sender = sender,
-                        recipient = otherUser,
-                        groupId = null,
+                        recipient = member,
+                        groupId = groupId,
                         text = effectiveText,
                         type = effectiveType,
                         leaveTrace = leaveTrace,
@@ -2912,13 +3018,33 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                         replyToSender = msgEntity.replyToSender,
                         replyToPreview = msgEntity.replyToPreview,
                         isForwarded = isForwarded,
-                        groupKey = null,
+                        groupKey = groupKey,
                     )
-                    db.collection("relay_messages").document(msgId).set(payload).await()
-                    mothDao.updateMessageStatus(msgEntity.localId, MessageStatus.SENT.name, sentAt = System.currentTimeMillis())
+                    db.collection("relay_messages").document(relayDocId).set(payload).await()
                 }
-            } catch (_: Exception) {}
-        }
+                mothDao.updateMessageStatus(msgEntity.localId, MessageStatus.SENT.name, sentAt = System.currentTimeMillis())
+            } else {
+                val payload = buildRelayPayload(
+                    msgId = msgId,
+                    sender = sender,
+                    recipient = otherUser,
+                    groupId = null,
+                    text = effectiveText,
+                    type = effectiveType,
+                    leaveTrace = leaveTrace,
+                    timeStr = timeStr,
+                    timestamp = now,
+                    attachment = attachment,
+                    replyToId = msgEntity.replyToId,
+                    replyToSender = msgEntity.replyToSender,
+                    replyToPreview = msgEntity.replyToPreview,
+                    isForwarded = isForwarded,
+                    groupKey = null,
+                )
+                db.collection("relay_messages").document(msgId).set(payload).await()
+                mothDao.updateMessageStatus(msgEntity.localId, MessageStatus.SENT.name, sentAt = System.currentTimeMillis())
+            }
+        } catch (_: Exception) {}
     }
 
     private suspend fun buildRelayPayload(
@@ -3743,7 +3869,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
 
     fun startCall(peerUsername: String, callType: CallType = CallType.VOICE, onError: (String) -> Unit = {}) {
         val me = currentUsername
-        val cleanPeer = peerUsername.trim().lowercase()
+        val cleanPeer = peerUsername.trim().removePrefix("@").lowercase()
         if (me.isBlank() || cleanPeer.isBlank() || cleanPeer == me || cleanPeer == "support") {
             onError("Cannot call '$cleanPeer'")
             return
@@ -3752,6 +3878,8 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
             onError("Already in a call")
             return
         }
+
+        webRtcManager.prepareForNewCall(isCaller = true)
 
         scope.launch {
             try {
@@ -3773,23 +3901,45 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                 activeCall = callState
 
                 withContext(Dispatchers.IO) {
+                    // Mark any stale prior ringing calls to this peer as ended so they don't shadow this call
+                    try {
+                        val existing = db.collection("call_sessions")
+                            .whereEqualTo("callee", cleanPeer)
+                            .get()
+                            .await()
+                        for (oldDoc in existing.documents) {
+                            if (oldDoc.getString("caller") == me && oldDoc.getString("status") == "RINGING") {
+                                oldDoc.reference.update("status", "ENDED").await()
+                            }
+                        }
+                    } catch (_: Exception) {}
+
                     db.collection("call_sessions").document(callId).set(
                         mapOf(
                             "caller" to me,
                             "callee" to cleanPeer,
                             "callType" to callType.name,
                             "status" to "RINGING",
-                            "createdAt" to System.currentTimeMillis(),
+                            "createdAt" to serverNow(),
+                            "serverCreatedAt" to FieldValue.serverTimestamp(),
                         )
                     ).await()
                 }
 
                 webRtcManager.startCallerSession(
                     callId = callId,
-                    onRemoteHangup = { scope.launch(Dispatchers.Main) { finishCallLocally(wasAnswered = webRtcManager.connectionState == "connected") } }
+                    onRemoteHangup = {
+                        scope.launch(Dispatchers.Main) {
+                            val answered = webRtcManager.connectionState == "connected" ||
+                                webRtcManager.connectionState == "reconnecting" ||
+                                activeCall?.status == "ACTIVE"
+                            finishCallLocally(wasAnswered = answered)
+                        }
+                    }
                 )
 
-                // Monitor when callee answers so timer starts
+                // Monitor when callee answers so timer starts, and time out unanswered rings after 45s
+                val ringStartedAt = System.currentTimeMillis()
                 callTimerJob?.cancel()
                 callTimerJob = scope.launch {
                     while (isActive && activeCall?.callId == callId) {
@@ -3798,6 +3948,9 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                             activeCall = activeCall?.copy(status = "ACTIVE", startedAtMs = System.currentTimeMillis())
                         } else if (rtcConn == "connecting" && activeCall?.status == "RINGING") {
                             activeCall = activeCall?.copy(status = "CONNECTING")
+                        } else if (activeCall?.status == "RINGING" && (System.currentTimeMillis() - ringStartedAt) > 45_000L) {
+                            declineOrEndCall()
+                            break
                         }
                         delay(300L)
                     }
@@ -3813,6 +3966,8 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         val call = activeCall ?: return
         if (call.isCaller || call.offerSdp.isNullOrBlank()) return
         val callId = call.callId
+        cancelNotificationForTarget(call.peerUsername)
+        webRtcManager.prepareForNewCall(isCaller = false)
         activeCall = call.copy(status = "CONNECTING", startedAtMs = 0L)
         webRtcManager.acceptCalleeSession(
             callId = callId,
@@ -3820,7 +3975,9 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
             onRemoteHangup = {
                 scope.launch(Dispatchers.Main) {
                     finishCallLocally(
-                        wasAnswered = webRtcManager.connectionState == "connected" || activeCall?.status == "ACTIVE"
+                        wasAnswered = webRtcManager.connectionState == "connected" ||
+                            webRtcManager.connectionState == "reconnecting" ||
+                            activeCall?.status == "ACTIVE"
                     )
                 }
             }
@@ -3838,7 +3995,9 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
 
     fun declineOrEndCall() {
         val call = activeCall ?: return
-        val wasAnswered = call.status == "ACTIVE" || webRtcManager.connectionState == "connected"
+        val wasAnswered = call.status == "ACTIVE" ||
+            webRtcManager.connectionState == "connected" ||
+            webRtcManager.connectionState == "reconnecting"
         val newStatus = if (!call.isCaller && call.status == "RINGING") "DECLINED" else "ENDED"
         finishCallLocally(wasAnswered = wasAnswered)
 
@@ -3857,6 +4016,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         activeCall = null
         callTimerJob?.cancel()
         callTimerJob = null
+        cancelNotificationForTarget(call.peerUsername)
         webRtcManager.endSession()
 
         val durationSec = if (wasAnswered && call.startedAtMs > 0L) {
@@ -4044,6 +4204,26 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
     }
 
     companion object {
+        @Volatile
+        private var activeInstanceRef: WeakReference<MothState>? = null
+
+        fun getActiveInstance(): MothState? = activeInstanceRef?.get()
+
+        suspend fun sendDirectReplyAwait(context: Context, chatId: String, replyText: String) {
+            val active = getActiveInstance()
+            if (active != null && active.isLoggedIn) {
+                active.sendReplyFromNotificationAwait(chatId, replyText)
+                return
+            }
+            val appCtx = context.applicationContext
+            val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val savedUser = prefs.getString(KEY_LOGGED_IN_USER, "")?.trim()?.lowercase().orEmpty()
+            if (savedUser.isBlank()) return
+            val tempScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            val tempState = MothState(appCtx, tempScope)
+            tempState.sendReplyFromNotificationAwait(chatId, replyText)
+        }
+
         private const val PREFS_NAME = "moth_session_prefs"
         private const val KEY_LOGGED_IN_USER = "logged_in_username"
         private const val KEY_AVATAR_COLOR = "user_avatar_color"
@@ -4060,7 +4240,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         private const val KEY_MSG_NOTIF = "pref_msg_notifications"
         private const val KEY_CALL_NOTIF = "pref_call_notifications"
         private const val KEY_NOTIF_PREVIEW = "pref_notif_previews"
-        private const val NOTIF_CHANNEL_ID = "moth_messages"
+        const val NOTIF_CHANNEL_ID = "moth_messages"
         private const val BURN_STEP_MS = 1500L
         private const val BURN_DURATION_MS = 10 * BURN_STEP_MS
         private const val MAX_RELAY_ATTACHMENT_BYTES = 600 * 1024

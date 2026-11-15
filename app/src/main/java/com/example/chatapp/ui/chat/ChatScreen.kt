@@ -79,9 +79,24 @@ fun ChatScreen(
     val context = LocalContext.current
     val coroutineScope = rememberCoroutineScope()
 
-    val activeConv = state.getActiveConversation()
+    val cleanChatTitle = remember(chatTitle) { chatTitle.trim().removePrefix("@") }
+    val resolvedConv = state.getActiveConversation()
+        ?: state.conversations.firstOrNull {
+            it.name.equals(cleanChatTitle, ignoreCase = true) ||
+                it.id.equals("${state.currentUsername.lowercase()}::${cleanChatTitle.lowercase()}", ignoreCase = true)
+        }
+    var cachedConv by remember(chatTitle) { mutableStateOf(resolvedConv) }
+    if (resolvedConv != null) {
+        cachedConv = resolvedConv
+    }
+    val activeConv = resolvedConv ?: cachedConv
+    var cachedPresence by remember(chatTitle) { mutableStateOf(state.activeContactPresence) }
+    if (state.activeChatId != null) {
+        cachedPresence = state.activeContactPresence
+    }
+
     val activeChatId = activeConv?.id
-        ?: "${state.currentUsername.lowercase()}::${chatTitle.trim().lowercase()}"
+        ?: "${state.currentUsername.lowercase()}::${cleanChatTitle.lowercase()}"
     val isGroup = activeConv?.isGroup == true
     val messages = state.activeMessages
 
@@ -101,6 +116,8 @@ fun ChatScreen(
     var pendingStickerCropLabel by remember { mutableStateOf("") }
     var pendingSafSavePath by remember { mutableStateOf<String?>(null) }
     var actionNotice by remember { mutableStateOf<String?>(null) }
+    var holdStickerTarget by remember { mutableStateOf<MothSticker?>(null) }
+    var unpinConfirmMessage by remember { mutableStateOf<MothMessage?>(null) }
 
     // Reply, Edit, Forward, Actions, Info, Delete, Search, Profile modals
     var replyingToMessage by remember { mutableStateOf<MothMessage?>(null) }
@@ -238,6 +255,8 @@ fun ChatScreen(
                 viewingViewOnceMessage = null
             }
             pendingStickerCropUri != null -> pendingStickerCropUri = null
+            holdStickerTarget != null -> holdStickerTarget = null
+            unpinConfirmMessage != null -> unpinConfirmMessage = null
             fullScreenPhotoPath != null -> fullScreenPhotoPath = null
             fullScreenVideoPath != null -> fullScreenVideoPath = null
             showPixelStickerMaker -> showPixelStickerMaker = false
@@ -338,19 +357,21 @@ fun ChatScreen(
     ) { granted ->
         val shouldCall = pendingVoiceCall
         pendingVoiceCall = false
+        val peerTarget = activeConv?.name ?: cleanChatTitle
         if (shouldCall && granted) {
-            state.startCall(chatTitle, CallType.VOICE) { err -> attachmentError = err }
+            state.startCall(peerTarget, CallType.VOICE) { err -> attachmentError = err }
         } else if (shouldCall) {
             attachmentError = "microphone permission required for calling"
         }
     }
 
     fun launchCallFromChat() {
+        val peerTarget = activeConv?.name ?: cleanChatTitle
         val granted = ContextCompat.checkSelfPermission(
             context, Manifest.permission.RECORD_AUDIO
         ) == PackageManager.PERMISSION_GRANTED
         if (granted) {
-            state.startCall(chatTitle, CallType.VOICE) { err -> attachmentError = err }
+            state.startCall(peerTarget, CallType.VOICE) { err -> attachmentError = err }
         } else {
             pendingVoiceCall = true
             callPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
@@ -665,7 +686,7 @@ fun ChatScreen(
 
                                 Column {
                                     Text(
-                                        text = activeConv?.name ?: chatTitle,
+                                        text = activeConv?.name ?: cleanChatTitle,
                                         fontFamily = PixelifySans,
                                         fontSize = 16.sp,
                                         fontWeight = FontWeight.Bold,
@@ -673,7 +694,7 @@ fun ChatScreen(
                                         maxLines = 1,
                                         overflow = TextOverflow.Ellipsis,
                                     )
-                                    val presence = state.activeContactPresence
+                                    val presence = cachedPresence
                                     Row(
                                         verticalAlignment = Alignment.CenterVertically,
                                         horizontalArrangement = Arrangement.spacedBy(5.dp),
@@ -859,8 +880,9 @@ fun ChatScreen(
                         fontSize = 11.sp,
                         color = MutedText,
                         modifier = Modifier
-                            .clickable { state.togglePinMessage(activeChatId, pinned.id) }
-                            .padding(start = 8.dp),
+                            .clickable { unpinConfirmMessage = pinned }
+                            .padding(start = 8.dp)
+                            .testTag("unpin_banner_button"),
                     )
                 }
             }
@@ -893,8 +915,6 @@ fun ChatScreen(
                         val isSearchMatch = inChatSearchQuery.isNotBlank() &&
                             !msg.isDeleted && msg.text.contains(inChatSearchQuery.trim(), ignoreCase = true)
                         val isSelected = msg.id in selectedMessageIds
-                        var tapCount by remember(msg.id) { mutableIntStateOf(0) }
-                        var lastTapAt by remember(msg.id) { mutableLongStateOf(0L) }
 
                         val toggleSelect = {
                             selectedMessageIds = if (msg.id in selectedMessageIds) {
@@ -907,17 +927,7 @@ fun ChatScreen(
                             if (selectedMessageIds.isNotEmpty()) {
                                 toggleSelect()
                             } else if (!msg.isDeleted) {
-                                val now = System.currentTimeMillis()
-                                val nextCount = if (now - lastTapAt <= 750L) tapCount + 1 else 1
-                                lastTapAt = now
-                                if (nextCount >= 3) {
-                                    tapCount = 0
-                                    lastTapAt = 0L
-                                    state.toggleStarMessage(activeChatId, msg.id)
-                                } else {
-                                    tapCount = nextCount
-                                    tappedReceiptMsgId = if (tappedReceiptMsgId == msg.id) null else msg.id
-                                }
+                                tappedReceiptMsgId = if (tappedReceiptMsgId == msg.id) null else msg.id
                             }
                         }
 
@@ -1082,7 +1092,11 @@ fun ChatScreen(
                                         }
                                     } else null,
                                     onPin = {
-                                        state.togglePinMessage(activeChatId, msg.id)
+                                        if (msg.isPinned) {
+                                            unpinConfirmMessage = msg
+                                        } else {
+                                            state.togglePinMessage(activeChatId, msg.id)
+                                        }
                                         selectedMessageIds = emptySet()
                                     },
                                     onInfo = {
@@ -1421,12 +1435,12 @@ fun ChatScreen(
                                         )
                                         showStickerTray = false
                                     },
-                                    onDelete = { state.deleteSticker(sticker.id) },
+                                    onHold = { holdStickerTarget = sticker },
                                 )
                             }
                         }
                         Text(
-                            text = "tap to send • hold to delete",
+                            text = "tap to send • hold to unfavourite / delete",
                             fontFamily = PixelifySans,
                             fontSize = 10.sp,
                             color = PlaceholderText,
@@ -1939,6 +1953,181 @@ fun ChatScreen(
             )
         }
 
+        // Unpin Confirmation Modal
+        unpinConfirmMessage?.let { targetMsg ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xBB1A1633))
+                    .clickable { unpinConfirmMessage = null }
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                SteppedBox(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = false) { }
+                        .testTag("unpin_confirm_dialog"),
+                    backgroundColor = MothHeaderBg,
+                    borderColor = LanternAmber,
+                    cutSize = 4.dp,
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Text(
+                            text = "unpin message?",
+                            fontFamily = PixelifySans,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 15.sp,
+                            color = LanternAmber,
+                        )
+                        val snippet = targetMsg.text.ifBlank {
+                            targetMsg.attachmentName ?: "pinned message"
+                        }
+                        Text(
+                            text = "\"${snippet.take(80)}\"",
+                            fontFamily = PixelifySans,
+                            fontSize = 12.sp,
+                            color = TheirBubbleText,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            SteppedButton(
+                                text = "cancel",
+                                onClick = { unpinConfirmMessage = null },
+                                backgroundColor = MothBgDark,
+                                borderColor = TheirBubbleBorder,
+                                textColor = MutedText,
+                                modifier = Modifier.weight(1f).testTag("cancel_unpin_button"),
+                                cutSize = 3.dp,
+                            )
+                            SteppedButton(
+                                text = "unpin",
+                                onClick = {
+                                    state.togglePinMessage(activeChatId, targetMsg.id)
+                                    unpinConfirmMessage = null
+                                },
+                                backgroundColor = MyBubbleFill,
+                                borderColor = MyBubbleBorder,
+                                textColor = MyBubbleText,
+                                modifier = Modifier.weight(1f).testTag("confirm_unpin_button"),
+                                cutSize = 3.dp,
+                            )
+                        }
+                    }
+                }
+            }
+        }
+
+        // Sticker Hold Options Modal (Unfavourite / Delete)
+        holdStickerTarget?.let { sticker ->
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .background(Color(0xBB1A1633))
+                    .clickable { holdStickerTarget = null }
+                    .padding(24.dp),
+                contentAlignment = Alignment.Center,
+            ) {
+                SteppedBox(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable(enabled = false) { }
+                        .testTag("sticker_hold_dialog"),
+                    backgroundColor = MothHeaderBg,
+                    borderColor = LanternAmber,
+                    cutSize = 4.dp,
+                ) {
+                    Column(
+                        modifier = Modifier.padding(18.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp),
+                    ) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        ) {
+                            SteppedBox(
+                                modifier = Modifier.size(52.dp),
+                                backgroundColor = MothBgDark,
+                                borderColor = TheirBubbleBorder,
+                                cutSize = 3.dp,
+                                borderWidth = 1.dp,
+                            ) {
+                                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    AsyncImage(
+                                        model = File(sticker.imageLocalPath),
+                                        contentDescription = sticker.label,
+                                        contentScale = ContentScale.Fit,
+                                        filterQuality = FilterQuality.None,
+                                        modifier = Modifier.size(40.dp),
+                                    )
+                                }
+                            }
+                            Column(modifier = Modifier.weight(1f)) {
+                                Text(
+                                    text = "sticker options",
+                                    fontFamily = PixelifySans,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 15.sp,
+                                    color = LanternAmber,
+                                )
+                                Text(
+                                    text = sticker.label,
+                                    fontFamily = PixelifySans,
+                                    fontSize = 12.sp,
+                                    color = MutedText,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                        }
+
+                        SteppedButton(
+                            text = "unfavourite",
+                            onClick = {
+                                state.deleteSticker(sticker.id)
+                                actionNotice = "removed from favourites"
+                                holdStickerTarget = null
+                            },
+                            backgroundColor = MothBgDark,
+                            borderColor = LanternAmber,
+                            textColor = LanternAmber,
+                            modifier = Modifier.fillMaxWidth().testTag("sticker_unfavourite_button"),
+                            cutSize = 3.dp,
+                        )
+                        SteppedButton(
+                            text = "delete",
+                            onClick = {
+                                state.deleteSticker(sticker.id)
+                                actionNotice = "sticker deleted"
+                                holdStickerTarget = null
+                            },
+                            backgroundColor = MothBgDark,
+                            borderColor = WaxSealRed,
+                            textColor = WaxSealRed,
+                            modifier = Modifier.fillMaxWidth().testTag("sticker_delete_button"),
+                            cutSize = 3.dp,
+                        )
+                        SteppedButton(
+                            text = "cancel",
+                            onClick = { holdStickerTarget = null },
+                            backgroundColor = TheirBubbleFill,
+                            borderColor = TheirBubbleBorder,
+                            textColor = MutedText,
+                            modifier = Modifier.fillMaxWidth().testTag("sticker_hold_cancel_button"),
+                            cutSize = 3.dp,
+                        )
+                    }
+                }
+            }
+        }
+
         // Brief floating notice toast for save / favourite sticker confirmations
         actionNotice?.let { noticeText ->
             SteppedBox(
@@ -2039,12 +2228,12 @@ private fun InputModeBanner(
 private fun StickerTrayItem(
     sticker: MothSticker,
     onSend: () -> Unit,
-    onDelete: () -> Unit,
+    onHold: () -> Unit,
 ) {
     SteppedBox(
         modifier = Modifier
             .width(68.dp)
-            .combinedClickable(onClick = onSend, onLongClick = onDelete)
+            .combinedClickable(onClick = onSend, onLongClick = onHold)
             .testTag("sticker_item_${sticker.id}"),
         backgroundColor = MothBgDark,
         borderColor = TheirBubbleBorder,
@@ -2645,7 +2834,11 @@ private fun ViewOnceCard(
                             color = if (isBurned) MutedText else if (message.isMine) MyBubbleText else TheirBubbleText,
                         )
                         if (message.isStarred && !message.isDeleted) {
-                            PixelStarIcon(tint = LanternAmber, filled = true, modifier = Modifier.size(11.dp))
+                            PixelStarIcon(
+                                tint = if (message.isMine) MyBubbleText else LanternAmber,
+                                filled = true,
+                                modifier = Modifier.size(11.dp),
+                            )
                         }
                     }
                     Text(
@@ -2791,7 +2984,7 @@ private fun BubbleBodyContent(
                         }
                         if (message.isStarred) {
                             PixelStarIcon(
-                                tint = LanternAmber,
+                                tint = if (message.isMine) MyBubbleText else LanternAmber,
                                 filled = true,
                                 modifier = Modifier.size(11.dp),
                             )
@@ -2822,7 +3015,7 @@ private fun BubbleBodyContent(
                 }
                 if (message.isStarred) {
                     PixelStarIcon(
-                        tint = LanternAmber,
+                        tint = if (message.isMine) MyBubbleText else LanternAmber,
                         filled = true,
                         modifier = Modifier.size(11.dp),
                     )

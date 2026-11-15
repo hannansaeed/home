@@ -240,8 +240,8 @@ fun MothNavigationRoot(
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
             when (event) {
-                Lifecycle.Event.ON_RESUME -> mothState.setAppForeground(true)
-                Lifecycle.Event.ON_PAUSE -> mothState.setAppForeground(false)
+                Lifecycle.Event.ON_START -> mothState.setAppForeground(true)
+                Lifecycle.Event.ON_STOP -> mothState.setAppForeground(false)
                 else -> Unit
             }
         }

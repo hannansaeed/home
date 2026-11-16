@@ -483,8 +483,14 @@ fun ChatListScreen(
                         }
                     }
                 }
-                "games" -> {
-                    MothMiniGameView()
+                "fun" -> {
+                    MothMiniGameView(
+                        state = state,
+                        onOpenChat = { target ->
+                            state.openConversation(target)
+                            onOpenChat(target)
+                        },
+                    )
                 }
                 "calls" -> {
                     CallHistoryEmptyPage(state = state, searchQuery = searchQuery)
@@ -533,10 +539,10 @@ fun ChatListScreen(
                     },
                 )
                 TabItem(
-                    label = "games",
-                    isSelected = activeTab == "games",
+                    label = "fun",
+                    isSelected = activeTab == "fun",
                     onClick = {
-                        activeTab = "games"
+                        activeTab = "fun"
                         showOptionsMenu = false
                         showSearch = false
                         searchQuery = ""

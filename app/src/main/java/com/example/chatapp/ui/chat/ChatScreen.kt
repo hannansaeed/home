@@ -21,14 +21,17 @@ import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.gestures.animateScrollBy
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.gestures.detectTapGestures
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
-import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -41,6 +44,7 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
@@ -70,6 +74,7 @@ import java.util.Date
 import java.util.Locale
 import kotlin.math.roundToInt
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun ChatScreen(
     state: MothState,
@@ -77,6 +82,7 @@ fun ChatScreen(
     onBack: () -> Unit,
 ) {
     val context = LocalContext.current
+    val clipboardManager = LocalClipboardManager.current
     val coroutineScope = rememberCoroutineScope()
 
     val cleanChatTitle = remember(chatTitle) { chatTitle.trim().removePrefix("@") }
@@ -105,6 +111,7 @@ fun ChatScreen(
 
     var showAttachMenu by remember { mutableStateOf(false) }
     var showStickerTray by remember { mutableStateOf(false) }
+    var showVoiceFilterMenu by remember { mutableStateOf(false) }
     var showPixelStickerMaker by remember { mutableStateOf(false) }
     var pendingAttachment by remember { mutableStateOf<PendingAttachment?>(null) }
     var attachmentError by remember { mutableStateOf<String?>(null) }
@@ -177,6 +184,31 @@ fun ChatScreen(
         if (highlightedMessageId != null) {
             delay(1450L)
             highlightedMessageId = null
+        }
+    }
+
+    LaunchedEffect(selectedMessageIds) {
+        if (selectedMessageIds.size == 1) {
+            val targetId = selectedMessageIds.first()
+            val idx = messages.indexOfFirst { it.id == targetId }
+            if (idx >= 0) {
+                delay(40L)
+                val layoutInfo = listState.layoutInfo
+                val visible = layoutInfo.visibleItemsInfo.firstOrNull { it.index == idx }
+                if (visible == null) {
+                    listState.animateScrollToItem(idx)
+                } else {
+                    val vpStart = layoutInfo.viewportStartOffset
+                    val vpEnd = layoutInfo.viewportEndOffset
+                    val itemTop = visible.offset
+                    val itemBottom = visible.offset + visible.size
+                    if (itemTop < vpStart) {
+                        listState.animateScrollBy((itemTop - vpStart - 24).toFloat())
+                    } else if (itemBottom > vpEnd) {
+                        listState.animateScrollBy((itemBottom - vpEnd + 24).toFloat())
+                    }
+                }
+            }
         }
     }
 
@@ -585,6 +617,23 @@ fun ChatScreen(
                             horizontalArrangement = Arrangement.spacedBy(4.dp),
                         ) {
                             if (nonDeletedSelected.isNotEmpty()) {
+                                val copyableTexts = nonDeletedSelected.mapNotNull { m -> m.text.takeIf { it.isNotBlank() } }
+                                if (copyableTexts.isNotEmpty()) {
+                                    Box(
+                                        modifier = Modifier
+                                            .size(38.dp)
+                                            .clickable {
+                                                clipboardManager.setText(AnnotatedString(copyableTexts.joinToString("\n")))
+                                                selectedMessageIds = emptySet()
+                                                actionNotice = "copied"
+                                            }
+                                            .testTag("action_copy_top_button"),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        PixelCopyIcon(tint = TheirBubbleText, modifier = Modifier.size(18.dp))
+                                    }
+                                }
+
                                 Box(
                                     modifier = Modifier
                                         .size(38.dp)
@@ -887,6 +936,163 @@ fun ChatScreen(
                 }
             }
 
+            // Active In-Chat Truth or Dare Bot Card (Discord-style bot embed)
+            state.activeChatTodSession?.let { tod ->
+                SteppedBox(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 12.dp, vertical = 6.dp)
+                        .testTag("in_chat_tod_bot_card"),
+                    backgroundColor = MothHeaderBg,
+                    borderColor = if (tod.promptType == "DARE") WaxSealRed else LanternAmber,
+                    cutSize = 4.dp,
+                    borderWidth = 2.dp,
+                ) {
+                    Column(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp),
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                modifier = Modifier.weight(1f),
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .background(SecureGreen)
+                                        .padding(horizontal = 5.dp, vertical = 1.dp),
+                                ) {
+                                    Text(
+                                        text = "BOT",
+                                        fontFamily = PixelifySans,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 10.sp,
+                                        color = MothBgDark,
+                                    )
+                                }
+                                Text(
+                                    text = "TOD • r${tod.roundNumber} • @${tod.turnUsername}",
+                                    fontFamily = PixelifySans,
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 12.sp,
+                                    color = LanternAmber,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                )
+                            }
+                            Text(
+                                text = "✕ remove",
+                                fontFamily = PixelifySans,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 11.sp,
+                                color = WaxSealRed,
+                                modifier = Modifier
+                                    .clickable { state.removeTodBotFromChat(activeChatId) }
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                                    .testTag("remove_tod_bot_button"),
+                            )
+                        }
+
+                        if (tod.promptText.isNotBlank()) {
+                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                                ) {
+                                    Box(
+                                        modifier = Modifier
+                                            .background(if (tod.promptType == "DARE") WaxSealRed else TheirBubbleFill)
+                                            .border(1.dp, if (tod.promptType == "DARE") WaxSealDarkEdge else TheirBubbleBorder)
+                                            .padding(horizontal = 6.dp, vertical = 1.dp),
+                                    ) {
+                                        Text(
+                                            text = tod.promptType,
+                                            fontFamily = PixelifySans,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 10.sp,
+                                            color = Color.White,
+                                        )
+                                    }
+                                    if (tod.promptPickedBy.isNotBlank()) {
+                                        Text(
+                                            text = "by @${tod.promptPickedBy}",
+                                            fontFamily = PixelifySans,
+                                            fontSize = 10.sp,
+                                            color = MutedText,
+                                        )
+                                    }
+                                }
+                                Text(
+                                    text = tod.promptText,
+                                    fontFamily = PixelifySans,
+                                    fontSize = 13.sp,
+                                    color = TheirBubbleText,
+                                    lineHeight = 18.sp,
+                                )
+                            }
+                        } else {
+                            Text(
+                                text = "pick truth, dare, or random for @${tod.turnUsername}",
+                                fontFamily = PixelifySans,
+                                fontSize = 12.sp,
+                                color = MutedText,
+                            )
+                        }
+
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp),
+                        ) {
+                            SteppedButton(
+                                text = "truth",
+                                onClick = { state.playTodTurn(activeChatId, "TRUTH") },
+                                backgroundColor = TheirBubbleFill,
+                                borderColor = TheirBubbleBorder,
+                                textColor = TheirBubbleText,
+                                modifier = Modifier.weight(1f),
+                                cutSize = 2.dp,
+                            )
+                            SteppedButton(
+                                text = "dare",
+                                onClick = { state.playTodTurn(activeChatId, "DARE") },
+                                backgroundColor = WaxSealRed,
+                                borderColor = WaxSealDarkEdge,
+                                textColor = Color.White,
+                                modifier = Modifier.weight(1f),
+                                cutSize = 2.dp,
+                            )
+                            SteppedButton(
+                                text = "random",
+                                onClick = { state.playTodTurn(activeChatId, "RANDOM") },
+                                backgroundColor = MyBubbleFill,
+                                borderColor = MyBubbleBorder,
+                                textColor = MyBubbleText,
+                                modifier = Modifier.weight(1f),
+                                cutSize = 2.dp,
+                            )
+                            if (tod.promptText.isNotBlank()) {
+                                SteppedButton(
+                                    text = "next",
+                                    onClick = { state.advanceTodTurn(activeChatId) },
+                                    backgroundColor = SecureGreen,
+                                    borderColor = Color(0xFF4CA877),
+                                    textColor = MothBgDark,
+                                    modifier = Modifier.weight(1f),
+                                    cutSize = 2.dp,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+
             // 2. Chat Area with Starfield & Moon
             Box(
                 modifier = Modifier
@@ -911,7 +1117,7 @@ fun ChatScreen(
                     verticalArrangement = Arrangement.spacedBy(14.dp, Alignment.Bottom),
                     contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp),
                 ) {
-                    items(messages, key = { it.id }) { msg ->
+                    itemsIndexed(messages, key = { _, msg -> msg.id }) { idx, msg ->
                         val isSearchMatch = inChatSearchQuery.isNotBlank() &&
                             !msg.isDeleted && msg.text.contains(inChatSearchQuery.trim(), ignoreCase = true)
                         val isSelected = msg.id in selectedMessageIds
@@ -942,6 +1148,98 @@ fun ChatScreen(
                             label = "msg_row_highlight",
                         )
 
+                        val showSingleToolbar = selectedMessages.size == 1 &&
+                            selectedMessages.first().id == msg.id &&
+                            !msg.isDeleted &&
+                            msg.type != MessageType.BURNED_TRACE &&
+                            msg.attachmentType != AttachmentType.CALL
+                        val placeToolbarAbove = idx >= (messages.size - 2).coerceAtLeast(0)
+
+                        @Composable
+                        fun RenderSingleToolbar() {
+                            val canSaveMedia = msg.type != MessageType.VIEW_ONCE &&
+                                msg.attachmentType != null &&
+                                msg.attachmentType != AttachmentType.CALL &&
+                                !msg.attachmentLocalPath.isNullOrBlank() &&
+                                File(msg.attachmentLocalPath).exists()
+                            val canFavSticker = msg.type != MessageType.VIEW_ONCE &&
+                                msg.attachmentType == AttachmentType.STICKER &&
+                                !msg.attachmentLocalPath.isNullOrBlank() &&
+                                File(msg.attachmentLocalPath).exists()
+                            SelectedMessageToolbar(
+                                message = msg,
+                                currentUsername = state.currentUsername,
+                                customReactionEmojis = state.customReactionEmojis,
+                                onReact = { emoji ->
+                                    state.reactToMessage(activeChatId, msg.id, emoji)
+                                    selectedMessageIds = emptySet()
+                                },
+                                onOpenEditReactions = { showEditReactionsDialog = true },
+                                onReply = {
+                                    replyingToMessage = msg
+                                    selectedMessageIds = emptySet()
+                                },
+                                onCopy = if (msg.text.isNotBlank()) {
+                                    {
+                                        clipboardManager.setText(AnnotatedString(msg.text))
+                                        selectedMessageIds = emptySet()
+                                        actionNotice = "copied"
+                                    }
+                                } else null,
+                                onEdit = if (msg.isMine && msg.type == MessageType.REGULAR && msg.attachmentType == null) {
+                                    {
+                                        editingMessage = msg
+                                        draft = msg.text
+                                        replyingToMessage = null
+                                        selectedMessageIds = emptySet()
+                                    }
+                                } else null,
+                                onPin = {
+                                    if (msg.isPinned) {
+                                        unpinConfirmMessage = msg
+                                    } else {
+                                        state.togglePinMessage(activeChatId, msg.id)
+                                    }
+                                    selectedMessageIds = emptySet()
+                                },
+                                onInfo = {
+                                    infoModalMessage = msg
+                                    selectedMessageIds = emptySet()
+                                },
+                                onStar = {
+                                    state.toggleStarMessage(activeChatId, msg.id)
+                                    selectedMessageIds = emptySet()
+                                },
+                                onFavoriteSticker = if (canFavSticker) {
+                                    {
+                                        coroutineScope.launch {
+                                            state.favoriteStickerFromMessage(msg)
+                                                .onSuccess { actionNotice = "added to my stickers" }
+                                                .onFailure { attachmentError = it.localizedMessage ?: "failed to save sticker" }
+                                        }
+                                        selectedMessageIds = emptySet()
+                                    }
+                                } else null,
+                                onSaveMedia = if (canSaveMedia) {
+                                    {
+                                        msg.attachmentLocalPath?.let { path ->
+                                            saveMediaFromChat(
+                                                localPath = path,
+                                                attachmentType = msg.attachmentType,
+                                                mimeType = msg.attachmentMimeType,
+                                                fileName = msg.attachmentName,
+                                            )
+                                        }
+                                        selectedMessageIds = emptySet()
+                                    }
+                                } else null,
+                                onDelete = {
+                                    deleteTargetMessages = listOf(msg)
+                                    selectedMessageIds = emptySet()
+                                },
+                            )
+                        }
+
                         Column(
                             modifier = Modifier
                                 .fillMaxWidth()
@@ -955,6 +1253,11 @@ fun ChatScreen(
                                 ),
                             horizontalAlignment = if (msg.isMine) Alignment.End else Alignment.Start,
                         ) {
+                            if (showSingleToolbar && placeToolbarAbove) {
+                                RenderSingleToolbar()
+                                Spacer(modifier = Modifier.height(6.dp))
+                            }
+
                             SwipeToReplyContainer(
                                 enabled = !msg.isDeleted && selectedMessageIds.isEmpty(),
                                 onSwipedToReply = { replyingToMessage = msg },
@@ -1048,6 +1351,7 @@ fun ChatScreen(
                                                         .onFailure { attachmentError = it.localizedMessage ?: "failed to save sticker" }
                                                 }
                                             },
+                                            onCallBack = { if (selectedMessageIds.isNotEmpty()) toggleSelect() else launchCallFromChat() },
                                             voicePlayer = state.voicePlayer,
                                         )
                                     }
@@ -1055,86 +1359,10 @@ fun ChatScreen(
                             }
 
                             // When exactly 1 message is selected, render reaction line and actions next to the message.
-                            // When 2 or more messages are selected, this floating bar disappears completely.
-                            if (selectedMessages.size == 1 &&
-                                selectedMessages.first().id == msg.id &&
-                                !msg.isDeleted &&
-                                msg.type != MessageType.BURNED_TRACE
-                            ) {
-                                val canSaveMedia = msg.type != MessageType.VIEW_ONCE &&
-                                    msg.attachmentType != null &&
-                                    !msg.attachmentLocalPath.isNullOrBlank() &&
-                                    File(msg.attachmentLocalPath).exists()
-                                val canFavSticker = msg.type != MessageType.VIEW_ONCE &&
-                                    msg.attachmentType == AttachmentType.STICKER &&
-                                    !msg.attachmentLocalPath.isNullOrBlank() &&
-                                    File(msg.attachmentLocalPath).exists()
+                            // For the last two messages, it renders above the bubble instead so it never hides under the input bar.
+                            if (showSingleToolbar && !placeToolbarAbove) {
                                 Spacer(modifier = Modifier.height(6.dp))
-                                SelectedMessageToolbar(
-                                    message = msg,
-                                    currentUsername = state.currentUsername,
-                                    customReactionEmojis = state.customReactionEmojis,
-                                    onReact = { emoji ->
-                                        state.reactToMessage(activeChatId, msg.id, emoji)
-                                        selectedMessageIds = emptySet()
-                                    },
-                                    onOpenEditReactions = { showEditReactionsDialog = true },
-                                    onReply = {
-                                        replyingToMessage = msg
-                                        selectedMessageIds = emptySet()
-                                    },
-                                    onEdit = if (msg.isMine && msg.type == MessageType.REGULAR && msg.attachmentType == null) {
-                                        {
-                                            editingMessage = msg
-                                            draft = msg.text
-                                            replyingToMessage = null
-                                            selectedMessageIds = emptySet()
-                                        }
-                                    } else null,
-                                    onPin = {
-                                        if (msg.isPinned) {
-                                            unpinConfirmMessage = msg
-                                        } else {
-                                            state.togglePinMessage(activeChatId, msg.id)
-                                        }
-                                        selectedMessageIds = emptySet()
-                                    },
-                                    onInfo = {
-                                        infoModalMessage = msg
-                                        selectedMessageIds = emptySet()
-                                    },
-                                    onStar = {
-                                        state.toggleStarMessage(activeChatId, msg.id)
-                                        selectedMessageIds = emptySet()
-                                    },
-                                    onFavoriteSticker = if (canFavSticker) {
-                                        {
-                                            coroutineScope.launch {
-                                                state.favoriteStickerFromMessage(msg)
-                                                    .onSuccess { actionNotice = "added to my stickers" }
-                                                    .onFailure { attachmentError = it.localizedMessage ?: "failed to save sticker" }
-                                            }
-                                            selectedMessageIds = emptySet()
-                                        }
-                                    } else null,
-                                    onSaveMedia = if (canSaveMedia) {
-                                        {
-                                            msg.attachmentLocalPath?.let { path ->
-                                                saveMediaFromChat(
-                                                    localPath = path,
-                                                    attachmentType = msg.attachmentType,
-                                                    mimeType = msg.attachmentMimeType,
-                                                    fileName = msg.attachmentName,
-                                                )
-                                            }
-                                            selectedMessageIds = emptySet()
-                                        }
-                                    } else null,
-                                    onDelete = {
-                                        deleteTargetMessages = listOf(msg)
-                                        selectedMessageIds = emptySet()
-                                    },
-                                )
+                                RenderSingleToolbar()
                             }
                         }
                     }
@@ -1507,6 +1735,46 @@ fun ChatScreen(
                 }
             }
 
+            // Voice Filter Picker (hold voicenote button to open)
+            AnimatedVisibility(visible = showVoiceFilterMenu) {
+                val activeFilter = state.voiceRecorder.selectedFilter
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .background(MothHeaderBg)
+                        .border(1.dp, LanternAmber)
+                        .horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 10.dp, vertical = 8.dp)
+                        .testTag("voice_filter_picker_bar"),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = "voice filter:",
+                        fontFamily = PixelifySans,
+                        fontWeight = FontWeight.Bold,
+                        fontSize = 11.sp,
+                        color = Color(0xFFFFD152),
+                    )
+                    VoiceFilter.entries.forEach { filter ->
+                        val isChosen = activeFilter == filter
+                        SteppedButton(
+                            text = filter.label,
+                            onClick = {
+                                state.voiceRecorder.selectedFilter = filter
+                                showVoiceFilterMenu = false
+                            },
+                            backgroundColor = if (isChosen) Color(0xFFFFD152) else TheirBubbleFill,
+                            borderColor = if (isChosen) Color(0xFFFFD152) else TheirBubbleBorder,
+                            textColor = if (isChosen) MothBgDark else TheirBubbleText,
+                            cutSize = 2.dp,
+                            borderWidth = 1.dp,
+                            modifier = Modifier.testTag("voice_filter_${filter.id}"),
+                        )
+                    }
+                }
+            }
+
             // 3. Bottom Input Bar (with Voice Note Recording mode & Sticker button)
             Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MothDivider))
             Box(
@@ -1519,12 +1787,13 @@ fun ChatScreen(
                     .padding(horizontal = 12.dp, vertical = 10.dp),
             ) {
                 if (state.voiceRecorder.isRecording) {
+                    val isRecPaused = state.voiceRecorder.isPaused
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(44.dp)
                             .background(MothBgDark, SteppedCornerShape(4.dp))
-                            .border(2.dp, WaxSealRed, SteppedCornerShape(4.dp))
+                            .border(2.dp, if (isRecPaused) LanternAmber else WaxSealRed, SteppedCornerShape(4.dp))
                             .padding(horizontal = 12.dp),
                         verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.SpaceBetween,
@@ -1533,16 +1802,44 @@ fun ChatScreen(
                             verticalAlignment = Alignment.CenterVertically,
                             horizontalArrangement = Arrangement.spacedBy(8.dp),
                         ) {
-                            Box(modifier = Modifier.size(8.dp).background(WaxSealRed))
+                            Box(modifier = Modifier.size(8.dp).background(if (isRecPaused) LanternAmber else WaxSealRed))
                             val sec = state.voiceRecorder.elapsedSec
+                            val activeFilter = state.voiceRecorder.selectedFilter
                             Text(
-                                text = "recording ${sec / 60}:${"%02d".format(sec % 60)}",
+                                text = "${if (isRecPaused) "paused" else "recording"} ${sec / 60}:${"%02d".format(sec % 60)}${if (activeFilter != VoiceFilter.NONE) " • ${activeFilter.label}" else ""}",
                                 fontFamily = PixelifySans,
                                 fontSize = 13.sp,
-                                color = LanternAmber,
+                                color = if (activeFilter != VoiceFilter.NONE) Color(0xFFFFD152) else LanternAmber,
                             )
                         }
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            SteppedBox(
+                                modifier = Modifier
+                                    .size(32.dp)
+                                    .clickable {
+                                        if (isRecPaused) {
+                                            state.voiceRecorder.resumeRecording()
+                                        } else {
+                                            state.voiceRecorder.pauseRecording()
+                                        }
+                                    }
+                                    .testTag("pause_resume_voice_button"),
+                                backgroundColor = TheirBubbleFill,
+                                borderColor = LanternAmber,
+                                cutSize = 2.dp,
+                                borderWidth = 1.dp,
+                            ) {
+                                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                    if (isRecPaused) {
+                                        PixelPlayIcon(tint = LanternAmber, modifier = Modifier.size(14.dp))
+                                    } else {
+                                        PixelPauseIcon(tint = LanternAmber, modifier = Modifier.size(14.dp))
+                                    }
+                                }
+                            }
                             SteppedButton(
                                 text = "✕",
                                 onClick = { state.voiceRecorder.cancelRecording() },
@@ -1554,10 +1851,10 @@ fun ChatScreen(
                             SteppedButton(
                                 text = "✓ send",
                                 onClick = {
-                                    val result = state.voiceRecorder.stopRecording()
-                                    if (result != null) {
-                                        val (file, dur) = result
-                                        coroutineScope.launch {
+                                    coroutineScope.launch {
+                                        val result = state.voiceRecorder.stopRecordingAndProcess()
+                                        if (result != null) {
+                                            val (file, dur) = result
                                             val attRes = state.prepareVoiceAttachment(file, dur)
                                             attRes.onSuccess { att ->
                                                 state.sendMessage(
@@ -1584,7 +1881,7 @@ fun ChatScreen(
                 } else {
                     Row(
                         modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
+                        verticalAlignment = Alignment.Bottom,
                         horizontalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
                         // + (More) toggle button
@@ -1616,7 +1913,7 @@ fun ChatScreen(
                         SteppedBox(
                             modifier = Modifier
                                 .weight(1f)
-                                .height(44.dp),
+                                .heightIn(min = 44.dp, max = 132.dp),
                             backgroundColor = MothBgDark,
                             borderColor = TheirBubbleBorder,
                             cutSize = 4.dp,
@@ -1624,20 +1921,18 @@ fun ChatScreen(
                         ) {
                             Row(
                                 modifier = Modifier
-                                    .fillMaxSize()
-                                    .padding(horizontal = 10.dp),
-                                verticalAlignment = Alignment.CenterVertically,
+                                    .fillMaxWidth()
+                                    .padding(horizontal = 10.dp, vertical = 8.dp),
+                                verticalAlignment = if (draft.contains('\n')) Alignment.Bottom else Alignment.CenterVertically,
                                 horizontalArrangement = Arrangement.spacedBy(6.dp),
                             ) {
-                                Box(modifier = Modifier.weight(1f)) {
-                                    if (draft.isEmpty()) {
-                                        Text(
-                                            text = if (pendingAttachment != null) "add caption..." else "say something",
-                                            fontFamily = PixelifySans,
-                                            fontSize = 14.sp,
-                                            color = PlaceholderText,
-                                        )
-                                    }
+                                Box(
+                                    modifier = Modifier
+                                        .weight(1f)
+                                        .heightIn(min = 28.dp, max = 112.dp)
+                                        .verticalScroll(rememberScrollState()),
+                                    contentAlignment = Alignment.CenterStart,
+                                ) {
                                     BasicTextField(
                                         value = draft,
                                         onValueChange = { draft = it },
@@ -1645,14 +1940,32 @@ fun ChatScreen(
                                             fontFamily = PixelifySans,
                                             fontSize = 14.sp,
                                             color = TheirBubbleText,
+                                            lineHeight = 19.sp,
                                         ),
                                         cursorBrush = SolidColor(LanternAmber),
-                                        singleLine = true,
+                                        singleLine = false,
+                                        maxLines = 5,
                                         keyboardOptions = KeyboardOptions(
                                             capitalization = KeyboardCapitalization.Sentences,
-                                            imeAction = ImeAction.Send,
+                                            imeAction = ImeAction.Default,
                                         ),
-                                        keyboardActions = KeyboardActions(onSend = { handleSend() }),
+                                        decorationBox = { innerTextField ->
+                                            Box(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                contentAlignment = Alignment.CenterStart,
+                                            ) {
+                                                if (draft.isEmpty()) {
+                                                    Text(
+                                                        text = if (pendingAttachment != null) "add caption..." else "say something",
+                                                        fontFamily = PixelifySans,
+                                                        fontSize = 14.sp,
+                                                        lineHeight = 19.sp,
+                                                        color = PlaceholderText,
+                                                    )
+                                                }
+                                                innerTextField()
+                                            }
+                                        },
                                         modifier = Modifier
                                             .fillMaxWidth()
                                             .testTag("message_input_field"),
@@ -1665,7 +1978,10 @@ fun ChatScreen(
                                         .size(26.dp)
                                         .clickable {
                                             showStickerTray = !showStickerTray
-                                            if (showStickerTray) showAttachMenu = false
+                                            if (showStickerTray) {
+                                                showAttachMenu = false
+                                                showVoiceFilterMenu = false
+                                            }
                                         }
                                         .testTag("sticker_picker_button"),
                                     contentAlignment = Alignment.Center,
@@ -1673,31 +1989,45 @@ fun ChatScreen(
                                     PixelStickerIcon(tint = if (showStickerTray) LanternAmber else MutedText)
                                 }
 
-                                // Voice Note Button beside Stickers (outlined pixel mic)
-                                Box(
+                                // Voice Note Button beside Stickers (tap to record, hold to pick voice filter)
+                                val hasActiveVoiceFilter = state.voiceRecorder.selectedFilter != VoiceFilter.NONE
+                                SteppedBox(
                                     modifier = Modifier
                                         .size(28.dp)
-                                        .clickable {
-                                            showStickerTray = false
-                                            showAttachMenu = false
-                                            val granted = ContextCompat.checkSelfPermission(
-                                                context, Manifest.permission.RECORD_AUDIO
-                                            ) == PackageManager.PERMISSION_GRANTED
-                                            if (granted) {
-                                                if (!state.voiceRecorder.startRecording()) {
-                                                    attachmentError = "unable to start microphone"
+                                        .combinedClickable(
+                                            onClick = {
+                                                showStickerTray = false
+                                                showAttachMenu = false
+                                                showVoiceFilterMenu = false
+                                                val granted = ContextCompat.checkSelfPermission(
+                                                    context, Manifest.permission.RECORD_AUDIO
+                                                ) == PackageManager.PERMISSION_GRANTED
+                                                if (granted) {
+                                                    if (!state.voiceRecorder.startRecording()) {
+                                                        attachmentError = "unable to start microphone"
+                                                    }
+                                                } else {
+                                                    micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                                                 }
-                                            } else {
-                                                micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                                            }
-                                        }
+                                            },
+                                            onLongClick = {
+                                                showStickerTray = false
+                                                showAttachMenu = false
+                                                showVoiceFilterMenu = !showVoiceFilterMenu
+                                            },
+                                        )
                                         .testTag("voice_note_button"),
-                                    contentAlignment = Alignment.Center,
+                                    backgroundColor = if (hasActiveVoiceFilter) Color(0xFFFFD152) else Color.Transparent,
+                                    borderColor = if (hasActiveVoiceFilter || showVoiceFilterMenu) Color(0xFFFFD152) else Color.Transparent,
+                                    cutSize = 2.dp,
+                                    borderWidth = if (hasActiveVoiceFilter || showVoiceFilterMenu) 1.dp else 0.dp,
                                 ) {
-                                    PixelMicIcon(
-                                        tint = MutedText,
-                                        modifier = Modifier.size(20.dp),
-                                    )
+                                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                                        PixelMicIcon(
+                                            tint = if (hasActiveVoiceFilter) MothBgDark else if (showVoiceFilterMenu) Color(0xFFFFD152) else MutedText,
+                                            modifier = Modifier.size(20.dp),
+                                        )
+                                    }
                                 }
                             }
                         }
@@ -2420,13 +2750,87 @@ private fun StandardMessageBubble(
     onJumpToReply: (String) -> Unit,
     onVoicePlayStarted: (MothMessage) -> Unit = {},
     onFavoriteSticker: (MothMessage) -> Unit = {},
+    onCallBack: () -> Unit = {},
     voicePlayer: VoiceNotePlayer,
 ) {
     Column(
         modifier = Modifier.fillMaxWidth(),
         horizontalAlignment = if (message.isMine) Alignment.End else Alignment.Start,
     ) {
-        if (!message.isDeleted && message.attachmentType == AttachmentType.STICKER && message.text.isBlank()) {
+        if (!message.isDeleted && message.attachmentType == AttachmentType.CALL) {
+            val dir = runCatching {
+                CallDirection.valueOf(message.attachmentName ?: CallDirection.MISSED.name)
+            }.getOrDefault(CallDirection.MISSED)
+            val isMissed = dir == CallDirection.MISSED
+            val dur = message.audioDurationSec
+            val iconColor = when {
+                isMissed -> WaxSealRed
+                dur > 0 -> SecureGreen
+                else -> LanternAmber
+            }
+            val callTitle = when (dir) {
+                CallDirection.MISSED -> "missed voice call"
+                CallDirection.OUTGOING -> "outgoing voice call"
+                CallDirection.INCOMING -> "incoming voice call"
+            }
+            val callSub = when {
+                dur > 0 -> "${dur / 60}:${"%02d".format(dur % 60)} • tap to call back"
+                isMissed -> "tap to call back"
+                else -> "no answer • tap to call back"
+            }
+            SteppedBox(
+                modifier = Modifier
+                    .widthIn(min = 200.dp, max = 270.dp)
+                    .combinedClickable(
+                        onClick = onCallBack,
+                        onLongClick = onLongPress,
+                    )
+                    .testTag("call_log_bubble_${message.id}"),
+                backgroundColor = if (message.isMine) MyBubbleFill.copy(alpha = 0.22f) else MothHeaderBg,
+                borderColor = if (isJumpHighlighted) LanternAmber else if (isMissed) WaxSealRed else TheirBubbleBorder,
+                cutSize = 4.dp,
+                borderWidth = 1.dp,
+            ) {
+                Row(
+                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 9.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    SteppedBox(
+                        modifier = Modifier.size(30.dp),
+                        backgroundColor = MothBgDark,
+                        borderColor = iconColor,
+                        cutSize = 2.dp,
+                        borderWidth = 1.dp,
+                    ) {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            PixelPhoneIcon(tint = iconColor, modifier = Modifier.size(16.dp))
+                        }
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = callTitle,
+                            fontFamily = PixelifySans,
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = if (isMissed) WaxSealRed else TheirBubbleText,
+                        )
+                        Text(
+                            text = callSub,
+                            fontFamily = PixelifySans,
+                            fontSize = 10.sp,
+                            color = MutedText,
+                        )
+                    }
+                    Text(
+                        text = message.time,
+                        fontFamily = PixelifySans,
+                        fontSize = 9.sp,
+                        color = PlaceholderText,
+                    )
+                }
+            }
+        } else if (!message.isDeleted && message.attachmentType == AttachmentType.STICKER && message.text.isBlank()) {
             val path = message.attachmentLocalPath
             Box(modifier = Modifier.combinedClickable(onClick = onTapBubble, onLongClick = onLongPress)) {
                 if (!path.isNullOrBlank() && File(path).exists()) {
@@ -2481,7 +2885,7 @@ private fun StandardMessageBubble(
                                 AttachmentType.PHOTO -> if (!message.attachmentLocalPath.isNullOrBlank()) onOpenPhoto(message.attachmentLocalPath) else onTapBubble()
                                 AttachmentType.VIDEO -> if (!message.attachmentLocalPath.isNullOrBlank()) onOpenVideo(message.attachmentLocalPath) else onTapBubble()
                                 AttachmentType.FILE -> if (!message.attachmentLocalPath.isNullOrBlank()) onOpenFile(message.attachmentLocalPath, message.attachmentMimeType) else onTapBubble()
-                                AttachmentType.VOICE, AttachmentType.STICKER, null -> onTapBubble()
+                                AttachmentType.VOICE, AttachmentType.STICKER, AttachmentType.CALL, null -> onTapBubble()
                             }
                         },
                         onLongClick = onLongPress,
@@ -2578,7 +2982,7 @@ private fun DisappearingMessageBubble(
                             AttachmentType.PHOTO -> if (!message.attachmentLocalPath.isNullOrBlank()) onOpenPhoto(message.attachmentLocalPath) else onTapBubble()
                             AttachmentType.VIDEO -> if (!message.attachmentLocalPath.isNullOrBlank()) onOpenVideo(message.attachmentLocalPath) else onTapBubble()
                             AttachmentType.FILE -> if (!message.attachmentLocalPath.isNullOrBlank()) onOpenFile(message.attachmentLocalPath, message.attachmentMimeType) else onTapBubble()
-                            AttachmentType.VOICE, AttachmentType.STICKER, null -> onTapBubble()
+                            AttachmentType.VOICE, AttachmentType.STICKER, AttachmentType.CALL, null -> onTapBubble()
                         }
                     },
                     onLongClick = onLongPress,
@@ -2970,7 +3374,7 @@ private fun BubbleBodyContent(
                     color = textColor,
                     modifier = Modifier.weight(1f, fill = false),
                 )
-                if (message.isStarred || message.isPinned || message.isEdited) {
+                if (message.isStarred || message.isPinned) {
                     Row(
                         horizontalArrangement = Arrangement.spacedBy(4.dp),
                         verticalAlignment = Alignment.CenterVertically,
@@ -2989,19 +3393,10 @@ private fun BubbleBodyContent(
                                 modifier = Modifier.size(11.dp),
                             )
                         }
-                        if (message.isEdited) {
-                            Text(
-                                text = "edited",
-                                fontFamily = PixelifySans,
-                                fontStyle = FontStyle.Italic,
-                                fontSize = 10.sp,
-                                color = textColor.copy(alpha = 0.7f),
-                            )
-                        }
                     }
                 }
             }
-        } else if (message.isStarred || message.isPinned || message.isEdited) {
+        } else if (message.isStarred || message.isPinned) {
             Row(
                 modifier = Modifier.align(Alignment.End),
                 horizontalArrangement = Arrangement.spacedBy(5.dp),
@@ -3020,16 +3415,17 @@ private fun BubbleBodyContent(
                         modifier = Modifier.size(11.dp),
                     )
                 }
-                if (message.isEdited) {
-                    Text(
-                        text = "edited",
-                        fontFamily = PixelifySans,
-                        fontStyle = FontStyle.Italic,
-                        fontSize = 10.sp,
-                        color = textColor.copy(alpha = 0.7f),
-                    )
-                }
             }
+        }
+        if (message.isEdited) {
+            Text(
+                text = "edited",
+                fontFamily = PixelifySans,
+                fontStyle = FontStyle.Italic,
+                fontSize = 10.sp,
+                color = textColor.copy(alpha = 0.72f),
+                modifier = Modifier.align(Alignment.End),
+            )
         }
     }
 }
@@ -3315,7 +3711,7 @@ private fun AttachmentSection(
                 }
             }
         }
-        null -> Unit
+        AttachmentType.CALL, null -> Unit
     }
 }
 

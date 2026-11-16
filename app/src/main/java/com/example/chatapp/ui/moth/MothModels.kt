@@ -27,7 +27,8 @@ enum class AttachmentType {
     VIDEO,
     FILE,
     STICKER,
-    VOICE
+    VOICE,
+    CALL
 }
 
 enum class CallType {
@@ -160,3 +161,45 @@ data class ActiveCallState(
     val startedAtMs: Long = 0L,
     val offerSdp: String? = null,
 )
+
+data class SharedNoteTopic(
+    val id: String,
+    val pairKey: String,
+    val title: String,
+    val content: String,
+    val updatedBy: String,
+    val updatedAt: Long,
+)
+
+data class TodSessionState(
+    val sessionId: String,
+    val active: Boolean = true,
+    val summonedBy: String = "",
+    val participants: List<String> = emptyList(),
+    val turnUsername: String = "",
+    val roundNumber: Int = 1,
+    val promptType: String = "",
+    val promptText: String = "",
+    val promptPickedBy: String = "",
+    val lastActionText: String = "",
+    val updatedAt: Long = 0L,
+)
+
+data class ScreentimePermissionEntry(
+    val docId: String,
+    val targetUser: String,
+    val requester: String,
+    val status: String, // PENDING | APPROVED | DENIED
+    val requestedAt: Long = 0L,
+    val respondedAt: Long = 0L,
+)
+
+data class ScreentimeUserSummary(
+    val username: String,
+    val todayMinutes: Int = 0,
+    val farlightMinutes: Int = 0,
+    val hasUsageAccess: Boolean = false,
+    val topAppsText: String = "",
+    val updatedAt: Long = 0L,
+)
+

@@ -1,9 +1,12 @@
 package com.example.chatapp.ui.moth
 
 import android.Manifest
+import android.app.AppOpsManager
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.app.usage.UsageEvents
+import android.app.usage.UsageStatsManager
 import android.content.ContentValues
 import android.content.Context
 import android.content.Intent
@@ -12,9 +15,15 @@ import android.graphics.Bitmap
 import android.graphics.BitmapFactory
 import android.graphics.Canvas
 import android.graphics.Paint
+import android.graphics.PorterDuff
+import android.graphics.PorterDuffXfermode
+import android.graphics.Rect
+import android.media.AudioAttributes
+import android.media.RingtoneManager
 import android.net.Uri
 import android.os.Build
 import android.os.Environment
+import android.os.Process
 import android.provider.MediaStore
 import android.provider.OpenableColumns
 import android.util.Base64
@@ -26,6 +35,7 @@ import androidx.core.app.Person
 import androidx.core.app.RemoteInput
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.core.graphics.drawable.IconCompat
 import com.example.chatapp.MainActivity
 import com.example.chatapp.R
 import java.lang.ref.WeakReference
@@ -61,6 +71,10 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.security.MessageDigest
 import java.text.SimpleDateFormat
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneId
+import java.time.temporal.ChronoUnit
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
@@ -138,6 +152,19 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
     var activeCall by mutableStateOf<ActiveCallState?>(null)
     val contactOnlineMap = mutableStateMapOf<String, Boolean>()
 
+    // Fun Hub: Shared Notes, Screentime & Internet TOD Bot
+    var sharedNoteTopics by mutableStateOf<List<SharedNoteTopic>>(emptyList())
+    var activeNotePeer by mutableStateOf<String?>(null)
+    var activeChatTodSession by mutableStateOf<TodSessionState?>(null)
+    var incomingScreentimeRequests by mutableStateOf<List<ScreentimePermissionEntry>>(emptyList())
+    val outgoingScreentimePermissions = mutableStateMapOf<String, ScreentimePermissionEntry>()
+    val peerScreentimeSummaries = mutableStateMapOf<String, ScreentimeUserSummary>()
+    var myScreentimeSummary by mutableStateOf(ScreentimeUserSummary(username = ""))
+
+    @Volatile private var volatileActiveChatId: String? = null
+    @Volatile private var volatileIsAppInForeground: Boolean = true
+    private var foregroundSessionStartedAtMs: Long = System.currentTimeMillis()
+
     private var localChatsJob: Job? = null
     private var localMessagesJob: Job? = null
     private var localStarredJob: Job? = null
@@ -156,6 +183,11 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
     private var myProfileListener: ListenerRegistration? = null
     private var incomingCallListener: ListenerRegistration? = null
     private var groupMetaListener: ListenerRegistration? = null
+    private var sharedNotesListener: ListenerRegistration? = null
+    private var todSessionListener: ListenerRegistration? = null
+    private var screentimeIncomingListener: ListenerRegistration? = null
+    private var screentimeOutgoingListener: ListenerRegistration? = null
+    private val screentimeStatsListeners = ConcurrentHashMap<String, ListenerRegistration>()
 
     private val listPresenceListeners = ConcurrentHashMap<String, ListenerRegistration>()
     private val contactPresenceSnapshots = ConcurrentHashMap<String, DocumentSnapshot>()
@@ -293,19 +325,8 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
     // -------------------------------------------------------------------------
 
     private fun ensureNotificationChannel() {
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val nm = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager
-            if (nm != null && nm.getNotificationChannel(NOTIF_CHANNEL_ID) == null) {
-                val channel = NotificationChannel(
-                    NOTIF_CHANNEL_ID,
-                    "Moth Messages",
-                    NotificationManager.IMPORTANCE_HIGH
-                ).apply {
-                    description = "Notifications for incoming Moth hours messages and calls"
-                }
-                nm.createNotificationChannel(channel)
-            }
-        }
+        val nm = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+        ensureFarlightNotificationChannel(nm)
     }
 
     private fun loadSavedAvatarForUser(username: String) {
@@ -325,13 +346,22 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
     }
 
     fun setAppForeground(inForeground: Boolean) {
+        volatileIsAppInForeground = inForeground
         isAppInForeground = inForeground
         val user = currentUsername
+        val now = System.currentTimeMillis()
         if (!inForeground) {
-            lastPausedAtMs = System.currentTimeMillis()
-        } else if (user.isNotBlank() && appLockEnabled && lastPausedAtMs > 0L) {
-            if (System.currentTimeMillis() - lastPausedAtMs > 2500L) {
-                isAppLocked = true
+            lastPausedAtMs = now
+            recordFarlightUsageInterval(now)
+        } else {
+            foregroundSessionStartedAtMs = now
+            if (user.isNotBlank() && appLockEnabled && lastPausedAtMs > 0L) {
+                if (now - lastPausedAtMs > 2500L) {
+                    isAppLocked = true
+                }
+            }
+            if (user.isNotBlank()) {
+                refreshMyScreentimeAndPublish()
             }
         }
         if (user.isNotBlank()) {
@@ -776,6 +806,12 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         myProfileListener?.remove(); myProfileListener = null
         incomingCallListener?.remove(); incomingCallListener = null
         groupMetaListener?.remove(); groupMetaListener = null
+        sharedNotesListener?.remove(); sharedNotesListener = null
+        todSessionListener?.remove(); todSessionListener = null
+        screentimeIncomingListener?.remove(); screentimeIncomingListener = null
+        screentimeOutgoingListener?.remove(); screentimeOutgoingListener = null
+        screentimeStatsListeners.values.forEach { it.remove() }
+        screentimeStatsListeners.clear()
         listPresenceListeners.values.forEach { it.remove() }
         listPresenceListeners.clear()
         contactPresenceSnapshots.clear()
@@ -787,6 +823,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         currentUsername = ""
         userAvatarPath = null
         userBio = ""
+        volatileActiveChatId = null
         activeChatId = null
         isAppLocked = false
         conversations = emptyList()
@@ -796,6 +833,12 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         callLogs = emptyList()
         isContactTyping = false
         activeContactPresence = ContactPresence()
+        sharedNoteTopics = emptyList()
+        activeNotePeer = null
+        activeChatTodSession = null
+        incomingScreentimeRequests = emptyList()
+        outgoingScreentimePermissions.clear()
+        peerScreentimeSummaries.clear()
     }
 
     private fun startSessionStreams(username: String) {
@@ -1123,7 +1166,13 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                     activeCall = null
                     if (missedCall != null) {
                         cancelNotificationForTarget(missedCall.peerUsername)
-                        recordCallLog(missedCall.peerUsername, missedCall.callType, CallDirection.MISSED, 0)
+                        recordCallLog(
+                            peer = missedCall.peerUsername,
+                            callType = missedCall.callType,
+                            direction = CallDirection.MISSED,
+                            durationSec = 0,
+                            callId = missedCall.callId,
+                        )
                     }
                 }
             }
@@ -1148,6 +1197,8 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                     }
                 }
             }
+
+        startScreentimeListeners(username)
     }
 
     private suspend fun handleIncomingRelayDoc(username: String, doc: DocumentSnapshot) {
@@ -1257,6 +1308,36 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                 mothDao.updateMessageListened(localId, listenedAt)
                 return
             }
+
+            "MISSED_CALL" -> {
+                val callId = doc.getString("callId")?.takeIf { it.isNotBlank() } ?: doc.id
+                val callTypeStr = doc.getString("callType") ?: CallType.VOICE.name
+                val callType = try { CallType.valueOf(callTypeStr) } catch (_: Exception) { CallType.VOICE }
+                val ts = doc.getLong("timestamp") ?: System.currentTimeMillis()
+                val existingCallMsg = mothDao.getMessage(localMsgIdFor(username, "call_$callId"))
+                if (existingCallMsg == null) {
+                    recordCallLog(
+                        peer = sender,
+                        callType = callType,
+                        direction = CallDirection.MISSED,
+                        durationSec = 0,
+                        callId = callId,
+                        customTimestamp = ts,
+                    )
+                    val chatId = chatIdFor(username, sender)
+                    if (!isChatCurrentlyOpen(chatId, sender) && callNotificationsEnabled) {
+                        showIncomingMessageNotification(
+                            title = sender,
+                            body = "missed voice call",
+                            openTarget = sender,
+                            chatId = chatId,
+                            isCall = false,
+                            senderHandle = sender,
+                        )
+                    }
+                }
+                return
+            }
         }
 
         // Standard MESSAGE delivery
@@ -1302,11 +1383,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
 
         val existingMsg = mothDao.getMessage(localMsgId)
         if (existingMsg == null) {
-            val openId = activeChatId
-            val isCurrentlyOpen = isAppInForeground && openId != null && (
-                openId.equals(chatId, ignoreCase = true) ||
-                    (groupId == null && openId.equals(chatIdFor(username, sender), ignoreCase = true))
-                )
+            val isCurrentlyOpen = isChatCurrentlyOpen(chatId, groupId ?: sender)
             val skew = receivedAt - timestamp
             val burnStart = if (msgType == MessageType.DISAPPEARING) {
                 if (skew in 0L..8_000L) timestamp else receivedAt
@@ -1387,8 +1464,9 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                 sendReceiptRelay(username, sender, listOf(msgId), receiptStatus)
             }
 
-            if (isCurrentlyOpen) {
-                cancelNotificationForTarget(chatId, groupId ?: sender)
+            val openNow = isChatCurrentlyOpen(chatId, groupId ?: sender)
+            if (openNow) {
+                cancelNotificationForTarget(chatId, groupId ?: sender, sender)
             } else if (!updatedChat.isMuted) {
                 val notifTitle = if (groupId != null) "${existingChat?.otherUsername ?: "group"} • $sender" else sender
                 val notifText = if (notificationPreviewsEnabled) {
@@ -1402,6 +1480,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                     openTarget = groupId ?: sender,
                     chatId = chatId,
                     isCall = false,
+                    senderHandle = sender,
                 )
             }
         }
@@ -1535,6 +1614,18 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         }
     }
 
+    private fun isChatCurrentlyOpen(chatId: String, targetOrSender: String): Boolean {
+        if (!volatileIsAppInForeground && !isAppInForeground) return false
+        val openId = volatileActiveChatId ?: activeChatId ?: return false
+        if (openId.equals(chatId, ignoreCase = true)) return true
+        val cleanTarget = targetOrSender.trim().removePrefix("@").lowercase()
+        if (cleanTarget.isBlank()) return false
+        val openAfter = openId.substringAfter("::", openId).lowercase()
+        if (openAfter == cleanTarget) return true
+        val openConvName = conversations.firstOrNull { it.id.equals(openId, ignoreCase = true) }?.name?.lowercase()
+        return openConvName != null && openConvName == cleanTarget
+    }
+
     private fun cancelNotificationForTarget(vararg targets: String) {
         val nm = appContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
         targets.forEach { t ->
@@ -1550,9 +1641,14 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         openTarget: String,
         chatId: String = "",
         isCall: Boolean = false,
+        senderHandle: String = openTarget,
     ) {
         if (isCall && !callNotificationsEnabled) return
         if (!isCall && !messageNotificationsEnabled) return
+        if (!isCall && isChatCurrentlyOpen(chatId, senderHandle)) {
+            cancelNotificationForTarget(chatId, openTarget, senderHandle)
+            return
+        }
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
             val granted = ContextCompat.checkSelfPermission(
                 appContext,
@@ -1564,65 +1660,53 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         ensureNotificationChannel()
 
         val notifId = (chatId.ifBlank { openTarget }).hashCode()
-        val intent = Intent(appContext, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            putExtra("open_chat_user", openTarget)
-        }
-        val pendingIntent = PendingIntent.getActivity(
-            appContext,
-            notifId,
-            intent,
-            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-        )
-
-        val builder = NotificationCompat.Builder(appContext, NOTIF_CHANNEL_ID)
-            .setSmallIcon(R.drawable.ic_moth_notification)
-            .setContentTitle(title)
-            .setContentText(body)
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
-            .setAutoCancel(true)
-            .setContentIntent(pendingIntent)
-
-        if (!isCall && chatId.isNotBlank()) {
-            val mePerson = Person.Builder().setName("you").build()
-            val peerPerson = Person.Builder().setName(title).build()
-            builder.setStyle(
-                NotificationCompat.MessagingStyle(mePerson)
-                    .addMessage(body, System.currentTimeMillis(), peerPerson)
-            )
-            val remoteInput = RemoteInput.Builder(NotificationReplyReceiver.KEY_TEXT_REPLY)
-                .setLabel("reply")
-                .build()
-            val replyIntent = Intent(appContext, NotificationReplyReceiver::class.java).apply {
-                action = NotificationReplyReceiver.ACTION_REPLY
-                putExtra(NotificationReplyReceiver.EXTRA_CHAT_ID, chatId)
-                putExtra(NotificationReplyReceiver.EXTRA_OPEN_TARGET, openTarget)
-                putExtra(NotificationReplyReceiver.EXTRA_NOTIF_ID, notifId)
-                putExtra(NotificationReplyReceiver.EXTRA_SENDER_TITLE, title)
-                putExtra(NotificationReplyReceiver.EXTRA_INCOMING_BODY, body)
+        if (isCall) {
+            val intent = Intent(appContext, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra("open_chat_user", openTarget)
             }
-            val replyPendingIntent = PendingIntent.getBroadcast(
+            val pendingIntent = PendingIntent.getActivity(
                 appContext,
-                notifId xor 0x4D4F,
-                replyIntent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
+                notifId,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
             )
-            val replyAction = NotificationCompat.Action.Builder(
-                R.drawable.ic_moth_notification,
-                "reply",
-                replyPendingIntent,
-            )
-                .addRemoteInput(remoteInput)
-                .setAllowGeneratedReplies(true)
-                .build()
-            builder.addAction(replyAction)
+            val peerBitmap = buildNotificationAvatarBitmap(appContext, senderHandle)
+            val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            val builder = NotificationCompat.Builder(appContext, NOTIF_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_moth_notification)
+                .setColor(0xFFFFB43B.toInt())
+                .setLargeIcon(peerBitmap)
+                .setContentTitle(title)
+                .setContentText(body)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setCategory(NotificationCompat.CATEGORY_CALL)
+                .setSound(soundUri)
+                .setDefaults(NotificationCompat.DEFAULT_SOUND or NotificationCompat.DEFAULT_VIBRATE)
+                .setAutoCancel(true)
+                .setContentIntent(pendingIntent)
+            nm.notify(notifId, builder.build())
+            return
         }
 
-        nm.notify(notifId, builder.build())
+        if (chatId.isBlank()) return
+        val owner = currentUsername
+        ioScope.launch {
+            postConversationNotification(
+                context = appContext,
+                ownerUsername = owner,
+                chatId = chatId,
+                openTarget = openTarget,
+                senderTitle = title,
+                senderHandle = senderHandle,
+                fallbackBody = body,
+                alertOnce = false,
+            )
+        }
     }
 
     private fun showIncomingCallNotification(caller: String, callType: CallType) {
-        showIncomingMessageNotification("@$caller", "incoming voice call", caller, chatId = "", isCall = true)
+        showIncomingMessageNotification("@$caller", "incoming voice call", caller, chatId = "", isCall = true, senderHandle = caller)
     }
 
     private fun startBurnMonitor(username: String) {
@@ -1883,13 +1967,15 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
             ?: cleanTarget.substringAfter("::", cleanTarget).removePrefix("@").trim().lowercase()
         val chatId = target?.id ?: chatIdFor(owner, otherUser)
 
+        volatileActiveChatId = chatId
         activeChatId = chatId
         isContactTyping = false
         lastTypingSentAt = 0L
         lastTypingSentState = false
-        cancelNotificationForTarget(chatId, otherUser)
+        cancelNotificationForTarget(chatId, otherUser, target?.name ?: "", cleanTarget)
 
         startObservingLocalMessages(owner, chatId)
+        startObservingTodSession(owner, chatId, otherUser, target?.isGroup == true)
         ensureBurnMonitorRunning()
 
         if (target?.isGroup == true || otherUser.startsWith("grp_")) {
@@ -1957,12 +2043,15 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         }
         voiceRecorder.cancelRecording()
         voicePlayer.stop()
+        volatileActiveChatId = null
         activeChatId = null
         localMessagesJob?.cancel(); localMessagesJob = null
         typingTimeoutJob?.cancel(); typingTimeoutJob = null
         typingListener?.remove(); typingListener = null
         presenceListener?.remove(); presenceListener = null
         groupMetaListener?.remove(); groupMetaListener = null
+        todSessionListener?.remove(); todSessionListener = null
+        activeChatTodSession = null
         isContactTyping = false
         activeContactPresence = ContactPresence()
     }
@@ -2336,13 +2425,14 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
             if (bytes.size > MAX_RELAY_ATTACHMENT_BYTES) {
                 return@withContext Result.failure(IllegalArgumentException("Voice note too large for relay"))
             }
+            val mime = if (audioFile.name.endsWith(".wav", ignoreCase = true)) "audio/wav" else "audio/mp4"
             val base64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
             Result.success(
                 PendingAttachment(
                     type = AttachmentType.VOICE,
                     name = audioFile.name,
                     localPath = audioFile.absolutePath,
-                    mimeType = "audio/mp4",
+                    mimeType = mime,
                     sizeBytes = bytes.size.toLong(),
                     base64Data = base64,
                     audioDurationSec = durationSec,
@@ -2669,15 +2759,15 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         }
         val resolvedType = attachmentType ?: when {
             srcFile.name.endsWith(".mp4", true) || srcFile.name.endsWith(".mov", true) -> AttachmentType.VIDEO
-            srcFile.name.endsWith(".m4a", true) || srcFile.name.endsWith(".mp3", true) -> AttachmentType.VOICE
+            srcFile.name.endsWith(".m4a", true) || srcFile.name.endsWith(".mp3", true) || srcFile.name.endsWith(".wav", true) -> AttachmentType.VOICE
             else -> AttachmentType.PHOTO
         }
         val fallbackExt = when (resolvedType) {
             AttachmentType.VIDEO -> "mp4"
-            AttachmentType.VOICE -> "m4a"
+            AttachmentType.VOICE -> if (srcFile.name.endsWith(".wav", true)) "wav" else "m4a"
             AttachmentType.STICKER -> "png"
             AttachmentType.PHOTO -> "jpg"
-            AttachmentType.FILE -> "bin"
+            AttachmentType.FILE, AttachmentType.CALL -> "bin"
         }
         val safeName = sanitizeFilename(
             fileName?.takeIf { it.isNotBlank() } ?: "farlight_${System.currentTimeMillis()}.$fallbackExt"
@@ -2686,10 +2776,10 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         }
         val resolvedMime = mimeType?.takeIf { it.isNotBlank() && it != "*/*" } ?: when (resolvedType) {
             AttachmentType.VIDEO -> "video/mp4"
-            AttachmentType.VOICE -> "audio/mp4"
+            AttachmentType.VOICE -> if (srcFile.name.endsWith(".wav", true)) "audio/wav" else "audio/mp4"
             AttachmentType.STICKER -> "image/png"
             AttachmentType.PHOTO -> "image/jpeg"
-            AttachmentType.FILE -> "application/octet-stream"
+            AttachmentType.FILE, AttachmentType.CALL -> "application/octet-stream"
         }
 
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.Q) {
@@ -2705,7 +2795,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                 AttachmentType.VIDEO ->
                     MediaStore.Video.Media.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY) to
                         "${Environment.DIRECTORY_MOVIES}/Farlight"
-                AttachmentType.VOICE, AttachmentType.FILE ->
+                AttachmentType.VOICE, AttachmentType.FILE, AttachmentType.CALL ->
                     MediaStore.Downloads.getContentUri(MediaStore.VOLUME_EXTERNAL_PRIMARY) to
                         "${Environment.DIRECTORY_DOWNLOADS}/Farlight"
             }
@@ -2928,6 +3018,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                 AttachmentType.VOICE -> "voice note"
                 AttachmentType.STICKER -> "sticker"
                 AttachmentType.FILE -> it.attachmentName ?: "file"
+                AttachmentType.CALL -> "voice call"
                 null -> "message"
             }
         }
@@ -3376,6 +3467,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
             mothDao.deleteMessagesByChat(owner, chatId)
             mothDao.deleteChat(chatId)
             if (activeChatId == chatId) {
+                volatileActiveChatId = null
                 withContext(Dispatchers.Main) { activeChatId = null }
             }
             if (chat != null) {
@@ -4013,6 +4105,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
 
     private fun finishCallLocally(wasAnswered: Boolean) {
         val call = activeCall ?: return
+        val me = currentUsername
         activeCall = null
         callTimerJob?.cancel()
         callTimerJob = null
@@ -4027,7 +4120,33 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
             wasAnswered -> CallDirection.INCOMING
             else -> CallDirection.MISSED
         }
-        recordCallLog(call.peerUsername, call.callType, direction, durationSec)
+        recordCallLog(
+            peer = call.peerUsername,
+            callType = call.callType,
+            direction = direction,
+            durationSec = durationSec,
+            callId = call.callId,
+        )
+
+        // Notify peer if caller hung up / timed out before callee answered so callee sees Missed Call in chat
+        if (call.isCaller && !wasAnswered && me.isNotBlank() && call.peerUsername.isNotBlank()) {
+            val missedRelayId = "missed_call_${call.callId}"
+            val ts = System.currentTimeMillis()
+            ioScope.launch {
+                try {
+                    db.collection("relay_messages").document(missedRelayId).set(
+                        mapOf(
+                            "relayKind" to "MISSED_CALL",
+                            "senderUsername" to me,
+                            "recipientUsername" to call.peerUsername.lowercase(),
+                            "callId" to call.callId,
+                            "callType" to call.callType.name,
+                            "timestamp" to ts,
+                        )
+                    ).await()
+                } catch (_: Exception) {}
+            }
+        }
     }
 
     private suspend fun cleanupCallSessionDoc(callId: String) {
@@ -4039,28 +4158,604 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         } catch (_: Exception) {}
     }
 
-    private fun recordCallLog(peer: String, callType: CallType, direction: CallDirection, durationSec: Int) {
+    private fun recordCallLog(
+        peer: String,
+        callType: CallType,
+        direction: CallDirection,
+        durationSec: Int,
+        callId: String? = null,
+        customTimestamp: Long = System.currentTimeMillis(),
+    ) {
         val owner = currentUsername
-        if (owner.isBlank()) return
-        val now = System.currentTimeMillis()
+        val cleanPeer = peer.trim().removePrefix("@").lowercase()
+        if (owner.isBlank() || cleanPeer.isBlank()) return
+        val now = customTimestamp
+        val timeLabel = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(now)).lowercase()
+        val msgId = if (!callId.isNullOrBlank()) "call_$callId" else "call_${now}_${UUID.randomUUID().toString().take(4)}"
+        val localMsgId = localMsgIdFor(owner, msgId)
+        val chatId = chatIdFor(owner, cleanPeer)
+
         ioScope.launch {
+            val logId = if (!callId.isNullOrBlank()) "clog_${owner}_$callId" else "clog_${now}_${UUID.randomUUID().toString().take(4)}"
             mothDao.upsertCallLog(
                 MothCallLogEntity(
-                    id = "clog_${now}_${UUID.randomUUID().toString().take(4)}",
+                    id = logId,
                     ownerUsername = owner,
-                    peerUsername = peer,
+                    peerUsername = cleanPeer,
                     callType = callType.name,
                     direction = direction.name,
                     durationSec = durationSec,
                     timestamp = now,
-                    timeLabel = currentTimeLabel(),
+                    timeLabel = timeLabel,
                 )
             )
+
+            if (mothDao.getMessage(localMsgId) == null) {
+                val preview = when (direction) {
+                    CallDirection.MISSED -> "missed voice call"
+                    CallDirection.INCOMING -> "incoming voice call"
+                    CallDirection.OUTGOING -> "outgoing voice call"
+                }
+                mothDao.upsertMessage(
+                    MothMessageEntity(
+                        localId = localMsgId,
+                        id = msgId,
+                        ownerUsername = owner,
+                        chatId = chatId,
+                        senderUsername = if (direction == CallDirection.OUTGOING) owner else cleanPeer,
+                        text = "",
+                        type = MessageType.REGULAR.name,
+                        time = timeLabel,
+                        timestamp = now,
+                        attachmentType = AttachmentType.CALL.name,
+                        attachmentName = direction.name,
+                        audioDurationSec = durationSec,
+                        status = MessageStatus.READ.name,
+                        sentAt = now,
+                        deliveredAt = now,
+                        readAt = now,
+                    )
+                )
+
+                val existingChat = mothDao.getChat(chatId)
+                val isCurrentlyOpen = isChatCurrentlyOpen(chatId, cleanPeer)
+                val unreadIncrement = if (direction == CallDirection.MISSED && !isCurrentlyOpen) 1 else 0
+                val updatedChat = (existingChat ?: MothChatEntity(
+                    id = chatId,
+                    ownerUsername = owner,
+                    otherUsername = cleanPeer,
+                    preview = preview,
+                    time = timeLabel,
+                    avatarColorArgb = avatarColorForUsername(cleanPeer).toArgb().toLong(),
+                    unreadCount = unreadIncrement,
+                    isLit = true,
+                    updatedAt = now,
+                )).copy(
+                    preview = preview,
+                    time = timeLabel,
+                    unreadCount = if (isCurrentlyOpen) 0 else (existingChat?.unreadCount ?: 0) + unreadIncrement,
+                    isLit = true,
+                    updatedAt = now,
+                )
+                mothDao.upsertChat(updatedChat)
+                syncChatToCloud(updatedChat)
+            }
         }
     }
 
     fun deleteCallLog(id: String) {
         ioScope.launch { mothDao.deleteCallLog(id) }
+    }
+
+    // -------------------------------------------------------------------------
+    // Fun Hub: Shared Notes, Internet TOD Bot, Screentime Sharing
+    // -------------------------------------------------------------------------
+
+    fun pairKeyFor(userA: String, userB: String): String {
+        val a = userA.trim().lowercase()
+        val b = userB.trim().lowercase()
+        return if (a <= b) "${a}__${b}" else "${b}__${a}"
+    }
+
+    suspend fun verifyUserExists(handle: String): Boolean = withContext(Dispatchers.IO) {
+        val clean = handle.trim().removePrefix("@").lowercase()
+        if (clean.isBlank() || clean == "support") return@withContext false
+        try {
+            db.collection("users").document(clean).get().await().exists()
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    fun openSharedNotesWith(peerUsername: String) {
+        val me = currentUsername
+        val cleanPeer = peerUsername.trim().removePrefix("@").lowercase()
+        if (me.isBlank() || cleanPeer.isBlank()) return
+        activeNotePeer = cleanPeer
+        sharedNotesListener?.remove()
+        sharedNoteTopics = emptyList()
+        val pairKey = pairKeyFor(me, cleanPeer)
+        sharedNotesListener = db.collection("shared_notes")
+            .document(pairKey)
+            .collection("topics")
+            .addSnapshotListener { snap, error ->
+                if (error != null || snap == null) return@addSnapshotListener
+                val list = snap.documents.map { d ->
+                    SharedNoteTopic(
+                        id = d.getString("id") ?: d.id,
+                        pairKey = pairKey,
+                        title = d.getString("title") ?: "untitled",
+                        content = d.getString("content") ?: "",
+                        updatedBy = d.getString("updatedBy") ?: "",
+                        updatedAt = d.getLong("updatedAt") ?: 0L,
+                    )
+                }.sortedByDescending { it.updatedAt }
+                sharedNoteTopics = list
+            }
+    }
+
+    fun closeSharedNotes() {
+        sharedNotesListener?.remove()
+        sharedNotesListener = null
+        activeNotePeer = null
+        sharedNoteTopics = emptyList()
+    }
+
+    fun saveSharedNoteTopic(
+        peerUsername: String,
+        topicId: String?,
+        title: String,
+        content: String,
+        onDone: (String) -> Unit = {},
+    ) {
+        val me = currentUsername
+        val cleanPeer = peerUsername.trim().removePrefix("@").lowercase()
+        val cleanTitle = title.trim().ifBlank { "untitled topic" }
+        if (me.isBlank() || cleanPeer.isBlank()) return
+        val pairKey = pairKeyFor(me, cleanPeer)
+        val docId = topicId?.takeIf { it.isNotBlank() }
+            ?: "note_${System.currentTimeMillis()}_${UUID.randomUUID().toString().take(4)}"
+        ioScope.launch {
+            try {
+                val payload = mapOf(
+                    "id" to docId,
+                    "pairKey" to pairKey,
+                    "participants" to listOf(me, cleanPeer).sorted(),
+                    "title" to cleanTitle,
+                    "content" to content,
+                    "updatedBy" to me,
+                    "updatedAt" to System.currentTimeMillis(),
+                )
+                db.collection("shared_notes")
+                    .document(pairKey)
+                    .collection("topics")
+                    .document(docId)
+                    .set(payload, SetOptions.merge())
+                    .await()
+                withContext(Dispatchers.Main) { onDone(docId) }
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun deleteSharedNoteTopic(peerUsername: String, topicId: String) {
+        val me = currentUsername
+        val cleanPeer = peerUsername.trim().removePrefix("@").lowercase()
+        if (me.isBlank() || cleanPeer.isBlank() || topicId.isBlank()) return
+        val pairKey = pairKeyFor(me, cleanPeer)
+        ioScope.launch {
+            try {
+                db.collection("shared_notes")
+                    .document(pairKey)
+                    .collection("topics")
+                    .document(topicId)
+                    .delete()
+                    .await()
+            } catch (_: Exception) {}
+        }
+    }
+
+    private fun todSessionIdForChat(chatId: String, owner: String, otherName: String, isGroup: Boolean): String {
+        val tail = chatId.substringAfter("::", "")
+        return if (isGroup || tail.startsWith("grp_")) tail else pairKeyFor(owner, otherName)
+    }
+
+    private fun startObservingTodSession(owner: String, chatId: String, otherUser: String, isGroup: Boolean) {
+        todSessionListener?.remove()
+        activeChatTodSession = null
+        if (!isGroup && otherUser == "support") return
+        val sessionId = todSessionIdForChat(chatId, owner, otherUser, isGroup)
+        if (sessionId.isBlank()) return
+        todSessionListener = db.collection("tod_sessions").document(sessionId)
+            .addSnapshotListener { snap, error ->
+                if (error != null || snap == null || !snap.exists()) {
+                    activeChatTodSession = null
+                    return@addSnapshotListener
+                }
+                val isActive = snap.getBoolean("active") ?: true
+                if (!isActive) {
+                    activeChatTodSession = null
+                    return@addSnapshotListener
+                }
+                val participants = (snap.get("participants") as? List<*>).orEmpty().filterIsInstance<String>()
+                activeChatTodSession = TodSessionState(
+                    sessionId = sessionId,
+                    active = true,
+                    summonedBy = snap.getString("summonedBy") ?: "",
+                    participants = participants,
+                    turnUsername = snap.getString("turnUsername") ?: participants.firstOrNull().orEmpty(),
+                    roundNumber = (snap.getLong("roundNumber") ?: 1L).toInt(),
+                    promptType = snap.getString("promptType") ?: "",
+                    promptText = snap.getString("promptText") ?: "",
+                    promptPickedBy = snap.getString("promptPickedBy") ?: "",
+                    lastActionText = snap.getString("lastActionText") ?: "",
+                    updatedAt = snap.getLong("updatedAt") ?: 0L,
+                )
+            }
+    }
+
+    fun summonTodBot(targetConv: MothConversation, onReady: (String) -> Unit) {
+        val me = currentUsername
+        if (me.isBlank()) return
+        val sessionId = todSessionIdForChat(targetConv.id, me, targetConv.name, targetConv.isGroup)
+        val participants = if (targetConv.isGroup && targetConv.members.isNotEmpty()) {
+            targetConv.members.distinct()
+        } else {
+            listOf(me, targetConv.name.lowercase()).distinct()
+        }
+        val firstTurn = participants.firstOrNull { !it.equals(me, ignoreCase = true) } ?: me
+        ioScope.launch {
+            try {
+                db.collection("tod_sessions").document(sessionId).set(
+                    mapOf(
+                        "sessionId" to sessionId,
+                        "active" to true,
+                        "summonedBy" to me,
+                        "participants" to participants,
+                        "turnUsername" to firstTurn,
+                        "roundNumber" to 1,
+                        "promptType" to "",
+                        "promptText" to "",
+                        "promptPickedBy" to "",
+                        "lastActionText" to "@$me summoned TOD bot",
+                        "updatedAt" to System.currentTimeMillis(),
+                    )
+                ).await()
+            } catch (_: Exception) {}
+            withContext(Dispatchers.Main) {
+                openConversation(targetConv.id)
+                onReady(targetConv.name)
+            }
+        }
+    }
+
+    fun playTodTurn(chatId: String, requestedType: String) {
+        val session = activeChatTodSession ?: return
+        val me = currentUsername
+        if (me.isBlank()) return
+        val effectiveType = if (requestedType == "RANDOM") {
+            if (kotlin.random.Random.nextBoolean()) "TRUTH" else "DARE"
+        } else {
+            requestedType
+        }
+        val promptPool = if (effectiveType == "TRUTH") BOT_TRUTHS else BOT_DARES
+        val candidates = promptPool.filterNot { it == session.promptText }.ifEmpty { promptPool }
+        val chosen = candidates.random()
+        ioScope.launch {
+            try {
+                db.collection("tod_sessions").document(session.sessionId).update(
+                    mapOf(
+                        "promptType" to effectiveType,
+                        "promptText" to chosen,
+                        "promptPickedBy" to me,
+                        "lastActionText" to "@$me rolled $effectiveType for @${session.turnUsername}",
+                        "updatedAt" to System.currentTimeMillis(),
+                    )
+                ).await()
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun advanceTodTurn(chatId: String) {
+        val session = activeChatTodSession ?: return
+        val me = currentUsername
+        val conv = conversations.firstOrNull { it.id == chatId }
+        val participants = session.participants.ifEmpty {
+            if (conv?.isGroup == true) conv.members else listOf(me, conv?.name?.lowercase() ?: me)
+        }.distinct()
+        val curIdx = participants.indexOfFirst { it.equals(session.turnUsername, ignoreCase = true) }
+        val nextPlayer = if (participants.isNotEmpty()) {
+            participants[(curIdx + 1) % participants.size]
+        } else me
+        ioScope.launch {
+            try {
+                db.collection("tod_sessions").document(session.sessionId).update(
+                    mapOf(
+                        "turnUsername" to nextPlayer,
+                        "roundNumber" to (session.roundNumber + 1),
+                        "promptType" to "",
+                        "promptText" to "",
+                        "promptPickedBy" to "",
+                        "lastActionText" to "next turn: @$nextPlayer",
+                        "updatedAt" to System.currentTimeMillis(),
+                    )
+                ).await()
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun removeTodBotFromChat(chatId: String) {
+        val session = activeChatTodSession
+        val owner = currentUsername
+        val conv = conversations.firstOrNull { it.id == chatId }
+        val sessionId = session?.sessionId ?: if (owner.isNotBlank() && conv != null) {
+            todSessionIdForChat(chatId, owner, conv.name, conv.isGroup)
+        } else ""
+        if (sessionId.isBlank()) return
+        activeChatTodSession = null
+        ioScope.launch {
+            try {
+                db.collection("tod_sessions").document(sessionId).delete().await()
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun hasSystemUsageStatsPermission(): Boolean {
+        return try {
+            val appOps = appContext.getSystemService(Context.APP_OPS_SERVICE) as? AppOpsManager ?: return false
+            val mode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                appOps.unsafeCheckOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), appContext.packageName)
+            } else {
+                @Suppress("DEPRECATION")
+                appOps.checkOpNoThrow(AppOpsManager.OPSTR_GET_USAGE_STATS, Process.myUid(), appContext.packageName)
+            }
+            mode == AppOpsManager.MODE_ALLOWED
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    private fun recordFarlightUsageInterval(nowMs: Long) {
+        val start = foregroundSessionStartedAtMs
+        if (start <= 0L || nowMs <= start) return
+        val deltaSec = ((nowMs - start) / 1000L).coerceIn(0L, 12 * 3600L)
+        foregroundSessionStartedAtMs = nowMs
+        val todayKey = LocalDate.now().toString()
+        val storedDay = prefs.getString(KEY_FARLIGHT_DAY_KEY, "") ?: ""
+        val prevSec = if (storedDay == todayKey) prefs.getLong(KEY_FARLIGHT_SECONDS, 0L) else 0L
+        prefs.edit()
+            .putString(KEY_FARLIGHT_DAY_KEY, todayKey)
+            .putLong(KEY_FARLIGHT_SECONDS, prevSec + deltaSec)
+            .apply()
+    }
+
+    private fun computeLocalScreentimeSummary(username: String): ScreentimeUserSummary {
+        val now = System.currentTimeMillis()
+        recordFarlightUsageInterval(now)
+        val todayKey = LocalDate.now().toString()
+        val farlightSec = if (prefs.getString(KEY_FARLIGHT_DAY_KEY, "") == todayKey) {
+            prefs.getLong(KEY_FARLIGHT_SECONDS, 0L)
+        } else 0L
+        val farlightMin = (farlightSec / 60L).toInt()
+        val hasAccess = hasSystemUsageStatsPermission()
+        if (!hasAccess) {
+            return ScreentimeUserSummary(
+                username = username,
+                todayMinutes = farlightMin,
+                farlightMinutes = farlightMin,
+                hasUsageAccess = false,
+                topAppsText = "Farlight: ${farlightMin}m",
+                updatedAt = now,
+            )
+        }
+        return try {
+            val usm = appContext.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
+            val zone = ZoneId.systemDefault()
+            val startOfDayMs = LocalDate.now(zone).atStartOfDay(zone).toInstant().toEpochMilli()
+            val perPackageMs = mutableMapOf<String, Long>()
+            if (usm != null) {
+                val events = usm.queryEvents(startOfDayMs, now)
+                val event = UsageEvents.Event()
+                val activeStarts = mutableMapOf<String, Long>()
+                while (events.hasNextEvent()) {
+                    events.getNextEvent(event)
+                    val pkg = event.packageName ?: continue
+                    when (event.eventType) {
+                        UsageEvents.Event.ACTIVITY_RESUMED -> activeStarts[pkg] = event.timeStamp
+                        UsageEvents.Event.ACTIVITY_PAUSED,
+                        UsageEvents.Event.ACTIVITY_STOPPED -> {
+                            val st = activeStarts.remove(pkg)
+                            if (st != null && event.timeStamp > st) {
+                                perPackageMs[pkg] = (perPackageMs[pkg] ?: 0L) + (event.timeStamp - st)
+                            }
+                        }
+                    }
+                }
+                activeStarts.forEach { (pkg, st) ->
+                    if (now > st) {
+                        perPackageMs[pkg] = (perPackageMs[pkg] ?: 0L) + (now - st)
+                    }
+                }
+            }
+            val totalMs = perPackageMs.values.sum()
+            val totalMin = maxOf(farlightMin, (totalMs / 60_000L).toInt())
+            val pm = appContext.packageManager
+            val topEntries = perPackageMs.entries
+                .filter { it.value >= 60_000L }
+                .sortedByDescending { it.value }
+                .take(4)
+                .map { (pkg, ms) ->
+                    val label = runCatching {
+                        val ai = pm.getApplicationInfo(pkg, 0)
+                        pm.getApplicationLabel(ai).toString()
+                    }.getOrElse {
+                        pkg.substringAfterLast('.').replaceFirstChar { c -> c.uppercase() }
+                    }
+                    "$label: ${(ms / 60_000L).toInt()}m"
+                }
+            ScreentimeUserSummary(
+                username = username,
+                todayMinutes = totalMin,
+                farlightMinutes = farlightMin,
+                hasUsageAccess = true,
+                topAppsText = if (topEntries.isNotEmpty()) topEntries.joinToString(" • ") else "Farlight: ${farlightMin}m",
+                updatedAt = now,
+            )
+        } catch (_: Exception) {
+            ScreentimeUserSummary(
+                username = username,
+                todayMinutes = farlightMin,
+                farlightMinutes = farlightMin,
+                hasUsageAccess = hasAccess,
+                topAppsText = "Farlight: ${farlightMin}m",
+                updatedAt = now,
+            )
+        }
+    }
+
+    fun refreshMyScreentimeAndPublish() {
+        val me = currentUsername
+        if (me.isBlank()) return
+        ioScope.launch {
+            val summary = computeLocalScreentimeSummary(me)
+            withContext(Dispatchers.Main) {
+                myScreentimeSummary = summary
+            }
+            try {
+                db.collection("screentime_stats").document(me).set(
+                    mapOf(
+                        "username" to me,
+                        "todayMinutes" to summary.todayMinutes,
+                        "farlightMinutes" to summary.farlightMinutes,
+                        "hasUsageAccess" to summary.hasUsageAccess,
+                        "topAppsText" to summary.topAppsText,
+                        "updatedAt" to summary.updatedAt,
+                    ),
+                    SetOptions.merge()
+                ).await()
+            } catch (_: Exception) {}
+        }
+    }
+
+    private fun startScreentimeListeners(username: String) {
+        screentimeIncomingListener?.remove()
+        screentimeIncomingListener = db.collection("screentime_permissions")
+            .whereEqualTo("targetUser", username)
+            .addSnapshotListener { snap, error ->
+                if (error != null || snap == null) return@addSnapshotListener
+                incomingScreentimeRequests = snap.documents.map { d ->
+                    ScreentimePermissionEntry(
+                        docId = d.id,
+                        targetUser = d.getString("targetUser") ?: username,
+                        requester = d.getString("requester") ?: "",
+                        status = d.getString("status") ?: "PENDING",
+                        requestedAt = d.getLong("requestedAt") ?: 0L,
+                        respondedAt = d.getLong("respondedAt") ?: 0L,
+                    )
+                }.filter { it.requester.isNotBlank() }
+                    .sortedByDescending { it.requestedAt }
+            }
+
+        screentimeOutgoingListener?.remove()
+        screentimeOutgoingListener = db.collection("screentime_permissions")
+            .whereEqualTo("requester", username)
+            .addSnapshotListener { snap, error ->
+                if (error != null || snap == null) return@addSnapshotListener
+                val nextMap = mutableMapOf<String, ScreentimePermissionEntry>()
+                for (d in snap.documents) {
+                    val entry = ScreentimePermissionEntry(
+                        docId = d.id,
+                        targetUser = d.getString("targetUser") ?: "",
+                        requester = username,
+                        status = d.getString("status") ?: "PENDING",
+                        requestedAt = d.getLong("requestedAt") ?: 0L,
+                        respondedAt = d.getLong("respondedAt") ?: 0L,
+                    )
+                    if (entry.targetUser.isNotBlank()) {
+                        nextMap[entry.targetUser] = entry
+                    }
+                }
+                outgoingScreentimePermissions.clear()
+                outgoingScreentimePermissions.putAll(nextMap)
+
+                val approvedPeers = nextMap.filterValues { it.status == "APPROVED" }.keys
+                val stale = screentimeStatsListeners.keys.filter { it !in approvedPeers }
+                stale.forEach { p ->
+                    screentimeStatsListeners.remove(p)?.remove()
+                    peerScreentimeSummaries.remove(p)
+                }
+                approvedPeers.forEach { peer ->
+                    if (!screentimeStatsListeners.containsKey(peer)) {
+                        val reg = db.collection("screentime_stats").document(peer)
+                            .addSnapshotListener { statDoc, statErr ->
+                                if (statErr != null || statDoc == null || !statDoc.exists()) return@addSnapshotListener
+                                peerScreentimeSummaries[peer] = ScreentimeUserSummary(
+                                    username = peer,
+                                    todayMinutes = (statDoc.getLong("todayMinutes") ?: 0L).toInt(),
+                                    farlightMinutes = (statDoc.getLong("farlightMinutes") ?: 0L).toInt(),
+                                    hasUsageAccess = statDoc.getBoolean("hasUsageAccess") ?: false,
+                                    topAppsText = statDoc.getString("topAppsText") ?: "",
+                                    updatedAt = statDoc.getLong("updatedAt") ?: 0L,
+                                )
+                            }
+                        screentimeStatsListeners[peer] = reg
+                    }
+                }
+            }
+
+        refreshMyScreentimeAndPublish()
+    }
+
+    fun requestPeerScreentimePermission(peerUsername: String, onError: (String) -> Unit = {}) {
+        val me = currentUsername
+        val target = peerUsername.trim().removePrefix("@").lowercase()
+        if (me.isBlank() || target.isBlank() || target == me || target == "support") {
+            onError("Invalid username")
+            return
+        }
+        ioScope.launch {
+            try {
+                val exists = db.collection("users").document(target).get().await().exists()
+                if (!exists) {
+                    withContext(Dispatchers.Main) { onError("User @$target not found") }
+                    return@launch
+                }
+                val docId = "${target}__by__${me}"
+                db.collection("screentime_permissions").document(docId).set(
+                    mapOf(
+                        "targetUser" to target,
+                        "requester" to me,
+                        "status" to "PENDING",
+                        "requestedAt" to System.currentTimeMillis(),
+                        "respondedAt" to 0L,
+                    )
+                ).await()
+            } catch (e: Exception) {
+                withContext(Dispatchers.Main) { onError(e.localizedMessage ?: "Failed to request permission") }
+            }
+        }
+    }
+
+    fun respondScreentimeRequest(requester: String, approve: Boolean) {
+        val me = currentUsername
+        val reqClean = requester.trim().lowercase()
+        if (me.isBlank() || reqClean.isBlank()) return
+        val docId = "${me}__by__${reqClean}"
+        ioScope.launch {
+            try {
+                db.collection("screentime_permissions").document(docId).set(
+                    mapOf(
+                        "targetUser" to me,
+                        "requester" to reqClean,
+                        "status" to if (approve) "APPROVED" else "DENIED",
+                        "respondedAt" to System.currentTimeMillis(),
+                    ),
+                    SetOptions.merge()
+                ).await()
+                if (approve) {
+                    refreshMyScreentimeAndPublish()
+                }
+            } catch (_: Exception) {}
+        }
     }
 
     // -------------------------------------------------------------------------
@@ -4140,6 +4835,11 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
             type == MessageType.BURNED_TRACE -> "message burned"
             attachmentType == AttachmentType.STICKER.name -> "sticker"
             attachmentType == AttachmentType.VOICE.name -> "voice note"
+            attachmentType == AttachmentType.CALL.name -> when (attachmentName) {
+                CallDirection.MISSED.name -> "missed voice call"
+                CallDirection.OUTGOING.name -> "outgoing voice call"
+                else -> "incoming voice call"
+            }
             attachmentType == AttachmentType.VIDEO.name -> if (text.isNotBlank()) "video: $text" else "video"
             attachmentType == AttachmentType.PHOTO.name -> if (text.isNotBlank()) "photo: $text" else "photo"
             attachmentType == AttachmentType.FILE.name -> if (text.isNotBlank()) "file: $text" else (attachmentName ?: "file")
@@ -4158,6 +4858,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         if (type == MessageType.DISAPPEARING) return "sent a burning message"
         if (attachmentType == AttachmentType.STICKER.name) return "sent a sticker"
         if (attachmentType == AttachmentType.VOICE.name) return "sent a voice note"
+        if (attachmentType == AttachmentType.CALL.name) return if (attachmentName == CallDirection.MISSED.name) "missed voice call" else "voice call"
         if (attachmentType == AttachmentType.VIDEO.name) return if (text.isNotBlank()) "video: $text" else "sent a video"
         if (attachmentType == AttachmentType.PHOTO.name) return if (text.isNotBlank()) "photo: $text" else "sent a photo"
         if (attachmentType == AttachmentType.FILE.name) return if (text.isNotBlank()) "file: $text" else "sent a file: ${attachmentName ?: "attachment"}"
@@ -4165,12 +4866,27 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
     }
 
     private fun formatLastSeen(lastSeenMs: Long): String {
-        val diff = System.currentTimeMillis() - lastSeenMs
+        val now = System.currentTimeMillis()
+        val diff = (now - lastSeenMs).coerceAtLeast(0L)
+        val zone = ZoneId.systemDefault()
+        val seenDate = Instant.ofEpochMilli(lastSeenMs).atZone(zone).toLocalDate()
+        val todayDate = Instant.ofEpochMilli(now).atZone(zone).toLocalDate()
+        val daysAgo = ChronoUnit.DAYS.between(seenDate, todayDate).coerceAtLeast(0L)
+        val timeStr = SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(lastSeenMs)).lowercase()
+
         return when {
             diff < 60_000L -> "just now"
-            diff < 3_600_000L -> "${(diff / 60_000L)}m ago"
-            diff < 86_400_000L -> SimpleDateFormat("h:mm a", Locale.getDefault()).format(Date(lastSeenMs)).lowercase()
-            else -> SimpleDateFormat("MMM d", Locale.getDefault()).format(Date(lastSeenMs)).lowercase()
+            diff < 3_600_000L -> "${(diff / 60_000L).coerceAtLeast(1)}m ago"
+            daysAgo == 0L -> "${(diff / 3_600_000L).coerceAtLeast(1)}h ago"
+            daysAgo == 1L -> "$timeStr yesterday"
+            daysAgo in 2L..6L -> {
+                val weekday = SimpleDateFormat("EEEE", Locale.getDefault()).format(Date(lastSeenMs)).lowercase()
+                "$timeStr $weekday"
+            }
+            else -> {
+                val pattern = if (seenDate.year == todayDate.year) "MMM d" else "MMM d, yyyy"
+                SimpleDateFormat(pattern, Locale.getDefault()).format(Date(lastSeenMs)).lowercase()
+            }
         }
     }
 
@@ -4209,20 +4925,288 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
 
         fun getActiveInstance(): MothState? = activeInstanceRef?.get()
 
-        suspend fun sendDirectReplyAwait(context: Context, chatId: String, replyText: String) {
+        suspend fun sendDirectReplyAwait(context: Context, chatId: String, replyText: String): String {
             val active = getActiveInstance()
             if (active != null && active.isLoggedIn) {
                 active.sendReplyFromNotificationAwait(chatId, replyText)
-                return
+                return active.currentUsername
             }
             val appCtx = context.applicationContext
             val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
             val savedUser = prefs.getString(KEY_LOGGED_IN_USER, "")?.trim()?.lowercase().orEmpty()
-            if (savedUser.isBlank()) return
+            if (savedUser.isBlank()) return ""
             val tempScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
             val tempState = MothState(appCtx, tempScope)
             tempState.sendReplyFromNotificationAwait(chatId, replyText)
+            return savedUser
         }
+
+        fun ensureFarlightNotificationChannel(nm: NotificationManager) {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                runCatching { nm.deleteNotificationChannel("moth_messages") }
+                if (nm.getNotificationChannel(NOTIF_CHANNEL_ID) == null) {
+                    val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+                    val audioAttrs = AudioAttributes.Builder()
+                        .setUsage(AudioAttributes.USAGE_NOTIFICATION_COMMUNICATION_INSTANT)
+                        .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build()
+                    val channel = NotificationChannel(
+                        NOTIF_CHANNEL_ID,
+                        "Farlight Messages",
+                        NotificationManager.IMPORTANCE_HIGH,
+                    ).apply {
+                        description = "Notifications for incoming Farlight messages and calls"
+                        setSound(soundUri, audioAttrs)
+                        enableVibration(true)
+                        vibrationPattern = longArrayOf(0L, 180L, 90L, 180L)
+                    }
+                    nm.createNotificationChannel(channel)
+                }
+            }
+        }
+
+        private fun renderCircularAvatarBitmap(
+            avatarFile: File?,
+            fallbackBgColor: Int,
+            initialLetter: String,
+            sizePx: Int = 128,
+        ): Bitmap {
+            val rawBitmap = if (avatarFile != null && avatarFile.exists()) {
+                runCatching { BitmapFactory.decodeFile(avatarFile.absolutePath) }.getOrNull()
+            } else null
+
+            val output = Bitmap.createBitmap(sizePx, sizePx, Bitmap.Config.ARGB_8888)
+            val canvas = Canvas(output)
+            val paint = Paint(Paint.ANTI_ALIAS_FLAG)
+
+            if (rawBitmap != null) {
+                val side = minOf(rawBitmap.width, rawBitmap.height).coerceAtLeast(1)
+                val xOff = (rawBitmap.width - side) / 2
+                val yOff = (rawBitmap.height - side) / 2
+                val square = Bitmap.createBitmap(rawBitmap, xOff, yOff, side, side)
+                val scaled = Bitmap.createScaledBitmap(square, sizePx, sizePx, true)
+                paint.color = 0xFFFFFFFF.toInt()
+                canvas.drawCircle(sizePx / 2f, sizePx / 2f, sizePx / 2f, paint)
+                paint.xfermode = PorterDuffXfermode(PorterDuff.Mode.SRC_IN)
+                canvas.drawBitmap(scaled, null, Rect(0, 0, sizePx, sizePx), paint)
+                if (square !== rawBitmap) square.recycle()
+                if (scaled !== square) scaled.recycle()
+                rawBitmap.recycle()
+            } else {
+                paint.color = fallbackBgColor
+                canvas.drawCircle(sizePx / 2f, sizePx / 2f, sizePx / 2f, paint)
+                val textPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+                    color = 0xFF1A1633.toInt()
+                    textSize = sizePx * 0.48f
+                    textAlign = Paint.Align.CENTER
+                    isFakeBoldText = true
+                }
+                val textY = (sizePx / 2f) - ((textPaint.descent() + textPaint.ascent()) / 2f)
+                canvas.drawText(initialLetter, sizePx / 2f, textY, textPaint)
+            }
+            return output
+        }
+
+        fun buildNotificationAvatarBitmap(context: Context, handle: String, sizePx: Int = 128): Bitmap {
+            val clean = handle.trim().removePrefix("@").lowercase()
+            val mediaFolder = File(context.applicationContext.filesDir, "moth_media")
+            val avatarFile = File(mediaFolder, "contact_avatar_${clean}.jpg")
+            val palette = intArrayOf(
+                0xFFB8A9E8.toInt(),
+                0xFF82D8A7.toInt(),
+                0xFFF38D71.toInt(),
+                0xFFFFD152.toInt(),
+                0xFF70D6FF.toInt(),
+            )
+            val bgColor = if (clean == "support") 0xFFFFB43B.toInt()
+            else palette[(clean.hashCode() and 0x7FFFFFFF) % palette.size]
+            val letter = clean.firstOrNull()?.uppercase() ?: "F"
+            return renderCircularAvatarBitmap(
+                avatarFile = if (clean.isNotBlank()) avatarFile else null,
+                fallbackBgColor = bgColor,
+                initialLetter = letter,
+                sizePx = sizePx,
+            )
+        }
+
+        fun buildSelfNotificationAvatarBitmap(context: Context, ownerUsername: String, sizePx: Int = 128): Bitmap {
+            val appCtx = context.applicationContext
+            val clean = ownerUsername.trim().removePrefix("@").lowercase()
+            val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val savedPath = if (clean.isNotBlank()) prefs.getString("${KEY_AVATAR_PATH}_$clean", null) else null
+            val avatarFile = when {
+                !savedPath.isNullOrBlank() && File(savedPath).exists() -> File(savedPath)
+                clean.isNotBlank() -> File(File(appCtx.filesDir, "moth_media"), "contact_avatar_${clean}.jpg").takeIf { it.exists() }
+                else -> null
+            }
+            val savedColor = prefs.getInt(KEY_AVATAR_COLOR, 0xFFB8A9E8.toInt())
+            val letter = clean.firstOrNull()?.uppercase() ?: "Y"
+            return renderCircularAvatarBitmap(
+                avatarFile = avatarFile,
+                fallbackBgColor = savedColor,
+                initialLetter = letter,
+                sizePx = sizePx,
+            )
+        }
+
+        suspend fun postConversationNotification(
+            context: Context,
+            ownerUsername: String,
+            chatId: String,
+            openTarget: String,
+            senderTitle: String,
+            senderHandle: String,
+            fallbackBody: String = "",
+            alertOnce: Boolean = false,
+        ) {
+            val appCtx = context.applicationContext
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                val granted = ContextCompat.checkSelfPermission(
+                    appCtx,
+                    Manifest.permission.POST_NOTIFICATIONS,
+                ) == PackageManager.PERMISSION_GRANTED
+                if (!granted) return
+            }
+            val nm = appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            ensureFarlightNotificationChannel(nm)
+
+            val notifId = (chatId.ifBlank { openTarget }).hashCode()
+            val openIntent = Intent(appCtx, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or
+                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
+                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra("open_chat_user", openTarget)
+            }
+            val openPending = PendingIntent.getActivity(
+                appCtx,
+                notifId,
+                openIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+
+            val peerBitmap = buildNotificationAvatarBitmap(appCtx, senderHandle.ifBlank { openTarget })
+            val meBitmap = buildSelfNotificationAvatarBitmap(appCtx, ownerUsername)
+            val mePerson = Person.Builder()
+                .setName("you")
+                .setIcon(IconCompat.createWithBitmap(meBitmap))
+                .build()
+            val peerPerson = Person.Builder()
+                .setName(senderTitle)
+                .setIcon(IconCompat.createWithBitmap(peerBitmap))
+                .build()
+
+            val style = NotificationCompat.MessagingStyle(mePerson)
+            val recentMsgs = if (ownerUsername.isNotBlank() && chatId.isNotBlank()) {
+                runCatching {
+                    ChatDatabaseProvider.get(appCtx).mothDao()
+                        .getMessagesByChatOnce(ownerUsername, chatId)
+                        .filter { !it.isDeleted }
+                        .takeLast(6)
+                }.getOrDefault(emptyList())
+            } else emptyList()
+
+            if (recentMsgs.isNotEmpty()) {
+                recentMsgs.forEach { msg ->
+                    val isMine = msg.senderUsername.equals(ownerUsername, ignoreCase = true)
+                    val msgPerson = if (isMine) mePerson else {
+                        val msgSender = msg.senderUsername.ifBlank { senderTitle }
+                        if (msgSender.equals(senderTitle, ignoreCase = true)) {
+                            peerPerson
+                        } else {
+                            Person.Builder()
+                                .setName(msgSender)
+                                .setIcon(IconCompat.createWithBitmap(buildNotificationAvatarBitmap(appCtx, msgSender)))
+                                .build()
+                        }
+                    }
+                    val displayLine = when {
+                        msg.attachmentType == AttachmentType.CALL.name ->
+                            if (msg.attachmentName == CallDirection.MISSED.name) "missed voice call" else "voice call"
+                        msg.text.isNotBlank() -> msg.text
+                        else -> msg.attachmentName ?: (msg.attachmentType?.lowercase() ?: "message")
+                    }
+                    style.addMessage(displayLine, msg.timestamp, msgPerson)
+                }
+            } else if (fallbackBody.isNotBlank()) {
+                style.addMessage(fallbackBody, System.currentTimeMillis(), peerPerson)
+            }
+
+            val remoteInput = RemoteInput.Builder(NotificationReplyReceiver.KEY_TEXT_REPLY)
+                .setLabel("reply")
+                .build()
+            val replyIntent = Intent(appCtx, NotificationReplyReceiver::class.java).apply {
+                action = NotificationReplyReceiver.ACTION_REPLY
+                putExtra(NotificationReplyReceiver.EXTRA_CHAT_ID, chatId)
+                putExtra(NotificationReplyReceiver.EXTRA_OPEN_TARGET, openTarget)
+                putExtra(NotificationReplyReceiver.EXTRA_NOTIF_ID, notifId)
+                putExtra(NotificationReplyReceiver.EXTRA_SENDER_TITLE, senderTitle)
+                putExtra(NotificationReplyReceiver.EXTRA_SENDER_HANDLE, senderHandle)
+                putExtra(NotificationReplyReceiver.EXTRA_INCOMING_BODY, fallbackBody)
+            }
+            val replyPending = PendingIntent.getBroadcast(
+                appCtx,
+                notifId xor 0x4D4F,
+                replyIntent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_MUTABLE,
+            )
+            val replyAction = NotificationCompat.Action.Builder(
+                R.drawable.ic_moth_notification,
+                "reply",
+                replyPending,
+            )
+                .addRemoteInput(remoteInput)
+                .setAllowGeneratedReplies(true)
+                .build()
+
+            val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            val builder = NotificationCompat.Builder(appCtx, NOTIF_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_moth_notification)
+                .setColor(0xFFFFB43B.toInt())
+                .setLargeIcon(peerBitmap)
+                .setStyle(style)
+                .addAction(replyAction)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setCategory(NotificationCompat.CATEGORY_MESSAGE)
+                .setOnlyAlertOnce(alertOnce)
+                .setAutoCancel(true)
+                .setContentIntent(openPending)
+            if (alertOnce) {
+                builder.setSilent(true)
+            } else {
+                builder.setSound(soundUri)
+                builder.setDefaults(NotificationCompat.DEFAULT_SOUND or NotificationCompat.DEFAULT_VIBRATE)
+            }
+
+            nm.notify(notifId, builder.build())
+        }
+
+        private val BOT_TRUTHS = listOf(
+            "What is a secret hobby nobody in your contacts knows about?",
+            "Who was the last person you searched for online?",
+            "What message did you type out recently and delete before sending?",
+            "What is the pettiest reason you stopped talking to someone?",
+            "If everyone in this chat read your camera roll, which photo would be hardest to explain?",
+            "What is one thing you pretend to understand just to fit in?",
+            "Have you ever blamed someone else for something you definitely did?",
+            "What is your most irrational 2am fear?",
+            "What is the weirdest dream you remember vividly?",
+            "If you had to delete every app except three, which three stay?",
+            "What compliment do you still think about years later?",
+            "What's the biggest lie you told to get out of plans?",
+        )
+
+        private val BOT_DARES = listOf(
+            "Send a voice note saying 'the lantern has landed' in this chat.",
+            "Draw the weirdest pixel sticker you can in 15 seconds and send it here.",
+            "Speak only in questions for the next two minutes.",
+            "Type a dramatic 2-sentence review of your favorite snack and send it here.",
+            "Describe your entire day using only 4 words and no punctuation.",
+            "Change your lantern bio for the rest of tonight.",
+            "Send the most recent meme or photo you saved in your gallery.",
+            "Rate the other person's last reply honestly out of 10 with zero explanation.",
+            "Record a 5-second voice note humming a random song without saying the name.",
+            "Tell a completely made-up fun fact as convincingly as possible.",
+        )
 
         private const val PREFS_NAME = "moth_session_prefs"
         private const val KEY_LOGGED_IN_USER = "logged_in_username"
@@ -4240,7 +5224,9 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         private const val KEY_MSG_NOTIF = "pref_msg_notifications"
         private const val KEY_CALL_NOTIF = "pref_call_notifications"
         private const val KEY_NOTIF_PREVIEW = "pref_notif_previews"
-        const val NOTIF_CHANNEL_ID = "moth_messages"
+        private const val KEY_FARLIGHT_DAY_KEY = "pref_farlight_usage_day"
+        private const val KEY_FARLIGHT_SECONDS = "pref_farlight_usage_sec"
+        const val NOTIF_CHANNEL_ID = "farlight_messages_v2"
         private const val BURN_STEP_MS = 1500L
         private const val BURN_DURATION_MS = 10 * BURN_STEP_MS
         private const val MAX_RELAY_ATTACHMENT_BYTES = 600 * 1024

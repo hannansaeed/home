@@ -122,6 +122,7 @@ fun SelectedMessageToolbar(
     onReact: (String) -> Unit,
     onOpenEditReactions: () -> Unit,
     onReply: () -> Unit,
+    onCopy: (() -> Unit)? = null,
     onEdit: (() -> Unit)?,
     onPin: () -> Unit,
     onInfo: () -> Unit,
@@ -218,6 +219,24 @@ fun SelectedMessageToolbar(
                 ) {
                     Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
                         PixelReplyIcon(tint = TheirBubbleText, modifier = Modifier.size(16.dp))
+                    }
+                }
+
+                // Copy Button
+                if (onCopy != null) {
+                    SteppedBox(
+                        modifier = Modifier
+                            .size(34.dp)
+                            .clickable(onClick = onCopy)
+                            .testTag("action_copy_button"),
+                        backgroundColor = MothBgDark,
+                        borderColor = TheirBubbleBorder,
+                        cutSize = 2.dp,
+                        borderWidth = 1.dp,
+                    ) {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            PixelCopyIcon(tint = TheirBubbleText, modifier = Modifier.size(15.dp))
+                        }
                     }
                 }
 

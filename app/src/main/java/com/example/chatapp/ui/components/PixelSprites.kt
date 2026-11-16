@@ -1079,3 +1079,25 @@ fun PixelSaveIcon(
     }
 }
 
+/**
+ * Outlined Pixel Copy / Clipboard Icon (two layered sheets).
+ */
+@Composable
+fun PixelCopyIcon(
+    tint: Color = TheirBubbleText,
+    modifier: Modifier = Modifier,
+) {
+    Canvas(modifier = modifier.size(16.dp)) {
+        val u = size.width / 10f
+        // Back sheet (top-left L)
+        drawRect(tint, Offset(1.2f * u, 1.2f * u), Size(5.0f * u, 1.0f * u))
+        drawRect(tint, Offset(1.2f * u, 1.2f * u), Size(1.0f * u, 5.5f * u))
+        // Front sheet
+        drawRect(tint, Offset(3.5f * u, 3.3f * u), Size(5.2f * u, 1.0f * u))
+        drawRect(tint, Offset(3.5f * u, 8.0f * u), Size(5.2f * u, 1.0f * u))
+        drawRect(tint, Offset(3.5f * u, 3.3f * u), Size(1.0f * u, 5.7f * u))
+        drawRect(tint, Offset(7.7f * u, 3.3f * u), Size(1.0f * u, 5.7f * u))
+    }
+}
+
+

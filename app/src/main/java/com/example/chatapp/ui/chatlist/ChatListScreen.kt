@@ -108,7 +108,7 @@ fun ChatListScreen(
                 ) {
                     PixelLantern(isLit = true)
                     Text(
-                        text = "Lanterns",
+                        text = if (isBloomTheme) "Blooms" else "Lanterns",
                         fontFamily = PixelifySans,
                         fontSize = 17.sp,
                         fontWeight = FontWeight.Bold,
@@ -199,7 +199,7 @@ fun ChatListScreen(
                                                     color = LanternAmber,
                                                 )
                                                 Text(
-                                                    text = "new lantern / chat",
+                                                    text = if (isBloomTheme) "new bloom / chat" else "new lantern / chat",
                                                     fontFamily = PixelifySans,
                                                     fontSize = 13.sp,
                                                     color = TheirBubbleText,
@@ -224,7 +224,7 @@ fun ChatListScreen(
                                                     modifier = Modifier.size(16.dp, 19.dp),
                                                 )
                                                 Text(
-                                                    text = "new group lantern",
+                                                    text = if (isBloomTheme) "new group garden" else "new group lantern",
                                                     fontFamily = PixelifySans,
                                                     fontSize = 13.sp,
                                                     color = TheirBubbleText,
@@ -351,7 +351,11 @@ fun ChatListScreen(
                     ) {
                         if (searchQuery.isEmpty()) {
                             Text(
-                                text = if (activeTab == "calls") "filter calls..." else "filter lanterns...",
+                                text = when {
+                                    activeTab == "calls" -> "filter calls..."
+                                    isBloomTheme -> "filter blooms..."
+                                    else -> "filter lanterns..."
+                                },
                                 fontFamily = PixelifySans,
                                 fontSize = 13.sp,
                                 color = PlaceholderText,
@@ -398,7 +402,7 @@ fun ChatListScreen(
                                 horizontalArrangement = Arrangement.SpaceBetween,
                             ) {
                                 Text(
-                                    text = "lit now",
+                                    text = if (isBloomTheme) "blooming now" else "lit now",
                                     fontFamily = PixelifySans,
                                     fontSize = 13.sp,
                                     color = MutedText,
@@ -441,7 +445,7 @@ fun ChatListScreen(
                                 contentAlignment = Alignment.Center,
                             ) {
                                 Text(
-                                    text = "no lanterns matching query",
+                                    text = if (isBloomTheme) "no blooms matching query" else "no lanterns matching query",
                                     fontFamily = PixelifySans,
                                     fontSize = 13.sp,
                                     color = MutedText,
@@ -586,7 +590,7 @@ fun ChatListScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0x991A1633))
+                .background(MothScrimSoft)
                 .clickable { showNewChatDialog = false }
                 .padding(20.dp),
             contentAlignment = Alignment.Center,
@@ -609,7 +613,7 @@ fun ChatListScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = "light a new lantern",
+                            text = if (isBloomTheme) "plant a new flower" else "light a new lantern",
                             fontFamily = PixelifySans,
                             fontWeight = FontWeight.Bold,
                             fontSize = 16.sp,
@@ -691,7 +695,7 @@ fun ChatListScreen(
                             ) {
                                 if (newContactInitialMsg.isEmpty()) {
                                     Text(
-                                        text = "lantern lit across the bay",
+                                        text = if (isBloomTheme) "flowers blooming across the field" else "lantern lit across the bay",
                                         fontFamily = PixelifySans,
                                         fontSize = 13.sp,
                                         color = PlaceholderText,
@@ -747,7 +751,7 @@ fun ChatListScreen(
                             cutSize = 3.dp,
                         )
                         SteppedButton(
-                            text = "ignite",
+                            text = if (isBloomTheme) "plant" else "ignite",
                             onClick = {
                                 if (newContactName.isNotBlank()) {
                                     state.createNewChat(
@@ -781,7 +785,7 @@ fun ChatListScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0x991A1633))
+                .background(MothScrimSoft)
                 .clickable { selectedProfileUsername = null }
                 .padding(24.dp),
             contentAlignment = Alignment.Center,
@@ -808,7 +812,7 @@ fun ChatListScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = "lantern profile",
+                            text = if (isBloomTheme) "garden profile" else "lantern profile",
                             fontFamily = PixelifySans,
                             fontWeight = FontWeight.Bold,
                             fontSize = 15.sp,
@@ -961,7 +965,7 @@ fun ChatListScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0x991A1633))
+                .background(MothScrimSoft)
                 .clickable { showNewGroupDialog = false }
                 .padding(20.dp),
             contentAlignment = Alignment.Center,
@@ -985,7 +989,7 @@ fun ChatListScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = "new group lantern",
+                            text = if (isBloomTheme) "new group garden" else "new group lantern",
                             fontFamily = PixelifySans,
                             fontWeight = FontWeight.Bold,
                             fontSize = 16.sp,
@@ -1018,7 +1022,7 @@ fun ChatListScreen(
                             ) {
                                 if (newGroupName.isEmpty()) {
                                     Text(
-                                        text = "e.g. night watch",
+                                        text = if (isBloomTheme) "e.g. sunny meadow" else "e.g. night watch",
                                         fontFamily = PixelifySans,
                                         fontSize = 13.sp,
                                         color = PlaceholderText,
@@ -1158,7 +1162,7 @@ fun ChatListScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0x991A1633))
+                .background(MothScrimSoft)
                 .clickable { holdChatTarget = null }
                 .padding(24.dp),
             contentAlignment = Alignment.Center,
@@ -1238,7 +1242,7 @@ fun ChatListScreen(
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .background(Color(0x991A1633))
+                .background(MothScrimSoft)
                 .clickable { showStarredModal = false }
                 .padding(20.dp),
             contentAlignment = Alignment.Center,
@@ -1468,21 +1472,32 @@ private fun ConversationRow(
 
             Spacer(modifier = Modifier.height(3.dp))
 
+            val displayPreview = if (isBloomTheme) {
+                when (conversation.preview) {
+                    "burning message" -> "petals falling"
+                    "message burned" -> "flower withered"
+                    "lantern lit" -> "flower planted"
+                    "group lantern lit" -> "group garden planted"
+                    else -> conversation.preview
+                }
+            } else {
+                conversation.preview
+            }
             // Message Preview Row
             Row(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(6.dp),
             ) {
                 if (conversation.isDisappearing) {
-                    // Small ember squares preview: 3 lit, 1 burned
+                    // Small ember/petal squares preview: 3 lit, 1 unlit
                     Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
                         repeat(3) {
-                            Box(modifier = Modifier.size(5.dp).background(LanternAmber))
+                            Box(modifier = Modifier.size(5.dp).background(if (isBloomTheme) MyBubbleFill else LanternAmber))
                         }
-                        Box(modifier = Modifier.size(5.dp).background(MothDivider))
+                        Box(modifier = Modifier.size(5.dp).background(MothEmberUnlit))
                     }
                     Text(
-                        text = conversation.preview,
+                        text = displayPreview,
                         fontFamily = PixelifySans,
                         fontSize = 13.sp,
                         color = MutedText,
@@ -1491,14 +1506,14 @@ private fun ConversationRow(
                     // Red wax seal square icon
                     Box(modifier = Modifier.size(6.dp).background(WaxSealRed))
                     Text(
-                        text = conversation.preview,
+                        text = displayPreview,
                         fontFamily = PixelifySans,
                         fontSize = 13.sp,
                         color = MutedText,
                     )
                 } else {
                     Text(
-                        text = conversation.preview,
+                        text = displayPreview,
                         fontFamily = PixelifySans,
                         fontSize = 13.sp,
                         color = MutedText,

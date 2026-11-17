@@ -99,14 +99,14 @@ fun SettingsScreen(
                     PixelLantern(isLit = true)
                     Column {
                         Text(
-                            text = "moth_fan",
+                            text = if (isBloomTheme) "daisy_fan" else "moth_fan",
                             fontFamily = PixelifySans,
                             fontWeight = FontWeight.Bold,
                             fontSize = 16.sp,
                             color = TheirBubbleText,
                         )
                         Text(
-                            text = "lantern lit • private by default",
+                            text = if (isBloomTheme) "garden blooming • private by default" else "lantern lit • private by default",
                             fontFamily = PixelifySans,
                             fontSize = 12.sp,
                             color = MutedText,
@@ -127,7 +127,7 @@ fun SettingsScreen(
                     verticalArrangement = Arrangement.spacedBy(12.dp),
                 ) {
                     Text(
-                        text = "lantern security",
+                        text = if (isBloomTheme) "garden security" else "lantern security",
                         fontFamily = PixelifySans,
                         fontWeight = FontWeight.Bold,
                         fontSize = 14.sp,
@@ -162,7 +162,7 @@ fun SettingsScreen(
                         verticalAlignment = Alignment.CenterVertically,
                     ) {
                         Text(
-                            text = "ember chime on message",
+                            text = if (isBloomTheme) "petal chime on message" else "ember chime on message",
                             fontFamily = PixelifySans,
                             fontSize = 13.sp,
                             color = TheirBubbleText,
@@ -180,7 +180,7 @@ fun SettingsScreen(
 
             // Extinguish Lantern / Sign Out button
             SteppedButton(
-                text = "extinguish lantern",
+                text = if (isBloomTheme) "flower withering" else "extinguish lantern",
                 onClick = onSignOut,
                 backgroundColor = WaxSealRed,
                 borderColor = WaxSealDarkEdge,

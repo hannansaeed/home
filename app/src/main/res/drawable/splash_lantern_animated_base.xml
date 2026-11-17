@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="288dp"
+    android:height="288dp"
+    android:viewportWidth="288"
+    android:viewportHeight="288">
+
+    <!-- Subtle Pixel Stars inside Android 12+ 192dp circular safe zone -->
+    <path android:fillColor="#4D9A93D6" android:pathData="M72,102h2.5v2.5h-2.5z M212,106h2.5v2.5h-2.5z" />
+    <path android:fillColor="#66FFFAE0" android:pathData="M76,184h2.5v2.5h-2.5z M208,180h2.5v2.5h-2.5z" />
+
+    <!-- Left Pixel Moth (24x14 centered around x=66, y=137) -->
+    <group android:translateX="66" android:translateY="137">
+        <path android:fillColor="#FFF4E4C1" android:pathData="M10.67,2.67h2.67v8h-2.67z M9.33,0h1.33v2.67h-1.33z M13.33,0h1.33v2.67h-1.33z" />
+        <group android:name="left_moth_wings" android:pivotX="12" android:pivotY="5">
+            <path android:fillColor="#FFD3C5FF" android:pathData="M0,0h8v2.67h-8z M2.67,2.67h8v2.67h-8z M5.33,5.33h5.33v2.67h-5.33z M16,0h8v2.67h-8z M13.33,2.67h8v2.67h-8z M13.33,5.33h5.33v2.67h-5.33z" />
+        </group>
+    </group>
+
+    <!-- Center Large Hanging Lantern (80x96 centered at 144,144 inside safe circle) -->
+    <group
+        android:name="lantern_scale_group"
+        android:pivotX="144"
+        android:pivotY="144"
+        android:translateX="104"
+        android:translateY="96"
+        android:scaleX="0.8"
+        android:scaleY="0.8">
+        <path
+            android:fillColor="#FFA36724"
+            android:pathData="M47.5,0h5v25h-5z M40,25h20v5h-20z M35,30h30v5h-30z M30,35h40v5h-40z M30,85h40v5h-40z M35,90h30v5h-30z M40,95h20v5h-20z M45,100h10v5h-10z" />
+        <path
+            android:name="lantern_body_path"
+            android:fillColor="#FFFFB43B"
+            android:pathData="M25,40h50v45h-50z" />
+        <path
+            android:name="lantern_glow_path"
+            android:fillColor="#FFFFF2D1"
+            android:pathData="M35,45h30v35h-30z" />
+        <path
+            android:name="lantern_core_path"
+            android:fillColor="#FFFFFFFF"
+            android:pathData="M42.5,52.5h15v20h-15z" />
+        <path
+            android:fillColor="#FF8C581E"
+            android:pathData="M10,40h7.5v7.5h-7.5z M82.5,40h7.5v7.5h-7.5z M2.5,65h7.5v7.5h-7.5z M90,65h7.5v7.5h-7.5z M10,90h7.5v7.5h-7.5z M82.5,90h7.5v7.5h-7.5z M30,105h7.5v7.5h-7.5z M62.5,105h7.5v7.5h-7.5z" />
+    </group>
+
+    <!-- Right Pixel Moth (24x14 centered around x=198, y=137) -->
+    <group android:translateX="198" android:translateY="137">
+        <path android:fillColor="#FFF4E4C1" android:pathData="M10.67,2.67h2.67v8h-2.67z M9.33,0h1.33v2.67h-1.33z M13.33,0h1.33v2.67h-1.33z" />
+        <group android:name="right_moth_wings" android:pivotX="12" android:pivotY="5">
+            <path android:fillColor="#FFD3C5FF" android:pathData="M0,0h8v2.67h-8z M2.67,2.67h8v2.67h-8z M5.33,5.33h5.33v2.67h-5.33z M16,0h8v2.67h-8z M13.33,2.67h8v2.67h-8z M13.33,5.33h5.33v2.67h-5.33z" />
+        </group>
+    </group>
+</vector>

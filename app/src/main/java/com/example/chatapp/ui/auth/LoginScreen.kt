@@ -57,7 +57,7 @@ fun LoginScreen(
     fun performLogin() {
         if (isSubmitting) return
         if (loginUsername.isBlank()) {
-            errorMessage = "please enter your lantern handle"
+            errorMessage = if (isBloomTheme) "please enter your flower handle" else "please enter your lantern handle"
         } else if (loginPassphrase.isBlank()) {
             errorMessage = "please enter your passphrase"
         } else {
@@ -81,7 +81,7 @@ fun LoginScreen(
     fun performSignup() {
         if (isSubmitting) return
         if (signupUsername.isBlank()) {
-            errorMessage = "please choose a lantern handle"
+            errorMessage = if (isBloomTheme) "please choose a flower handle" else "please choose a lantern handle"
         } else if (signupPassphrase.isBlank()) {
             errorMessage = "please set a passphrase"
         } else if (signupPassphrase.length < 3) {
@@ -186,7 +186,7 @@ fun LoginScreen(
             Spacer(modifier = Modifier.height(6.dp))
 
             Text(
-                text = if (authMode == AuthScreenMode.LOGIN) "private by default" else "craft your nocturnal identity",
+                text = if (authMode == AuthScreenMode.LOGIN) "private by default" else if (isBloomTheme) "grow your private garden" else "craft your nocturnal identity",
                 fontFamily = PixelifySans,
                 fontSize = 15.sp,
                 color = MutedText,
@@ -246,7 +246,7 @@ fun LoginScreen(
                         ) {
                             if (loginUsername.isEmpty()) {
                                 Text(
-                                    text = "e.g. moth_fan",
+                                    text = if (isBloomTheme) "e.g. daisy_fan" else "e.g. moth_fan",
                                     fontFamily = PixelifySans,
                                     fontSize = 15.sp,
                                     color = PlaceholderText,
@@ -359,7 +359,7 @@ fun LoginScreen(
 
                 // Primary Button: "light the lantern" (WORKS AS LOGIN)
                 SteppedButton(
-                    text = if (isSubmitting) "lighting..." else "light the lantern",
+                    text = if (isSubmitting) (if (isBloomTheme) "blooming..." else "lighting...") else (if (isBloomTheme) "bloom your flower" else "light the lantern"),
                     onClick = { performLogin() },
                     enabled = !isSubmitting,
                     backgroundColor = MyBubbleFill,
@@ -403,7 +403,7 @@ fun LoginScreen(
 
                 // Secondary Outlined Button: "make a new lantern" (OPENS SIGNUP PAGE)
                 SteppedButton(
-                    text = "make a new lantern",
+                    text = if (isBloomTheme) "plant a new flower" else "make a new lantern",
                     onClick = {
                         authMode = AuthScreenMode.SIGNUP
                         errorMessage = null
@@ -425,7 +425,7 @@ fun LoginScreen(
                     verticalArrangement = Arrangement.spacedBy(6.dp),
                 ) {
                     Text(
-                        text = "choose lantern handle",
+                        text = if (isBloomTheme) "choose flower handle" else "choose lantern handle",
                         fontFamily = PixelifySans,
                         fontSize = 14.sp,
                         color = MutedText,
@@ -448,7 +448,7 @@ fun LoginScreen(
                         ) {
                             if (signupUsername.isEmpty()) {
                                 Text(
-                                    text = "e.g. night_flier, tide_watcher",
+                                    text = if (isBloomTheme) "e.g. sunny_bee, meadow_dew" else "e.g. night_flier, tide_watcher",
                                     fontFamily = PixelifySans,
                                     fontSize = 14.sp,
                                     color = PlaceholderText,
@@ -622,7 +622,7 @@ fun LoginScreen(
 
                 // Primary Button: "ignite new lantern" (CREATES NEW ACCOUNT / SIGNUP)
                 SteppedButton(
-                    text = if (isSubmitting) "igniting..." else "ignite new lantern",
+                    text = if (isSubmitting) (if (isBloomTheme) "planting..." else "igniting...") else (if (isBloomTheme) "plant a flower" else "ignite new lantern"),
                     onClick = { performSignup() },
                     enabled = !isSubmitting,
                     backgroundColor = MyBubbleFill,
@@ -666,7 +666,7 @@ fun LoginScreen(
 
                 // Return to Login Button
                 SteppedButton(
-                    text = "already have a lantern? light it",
+                    text = if (isBloomTheme) "already have a flower? bloom it" else "already have a lantern? light it",
                     onClick = {
                         authMode = AuthScreenMode.LOGIN
                         errorMessage = null

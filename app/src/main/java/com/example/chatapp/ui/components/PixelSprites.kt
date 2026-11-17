@@ -31,89 +31,136 @@ fun PixelLantern(
     modifier: Modifier = Modifier,
     isLit: Boolean = true,
 ) {
+    val bloom = isBloomTheme
     Canvas(modifier = modifier.size(20.dp, 24.dp)) {
-        val px = size.width / 10f
-        val py = size.height / 12f
+        if (bloom) {
+            val u = size.width / 10f
+            val v = size.height / 12f
+            val petalColor = if (isLit) Color(0xFFFFD147) else Color(0xFF9EB58F)
+            val centerColor = if (isLit) Color(0xFF5D3B1A) else Color(0xFF687E5B)
 
-        val capColor = if (isLit) Color(0xFFA36724) else Color(0xFF332B50)
-        val bodyColor = if (isLit) LanternAmber else Color(0xFF433D6B)
-        val glowColor = if (isLit) LanternGlow else Color(0xFF5B52A8)
+            // Pixel sunflower petals
+            drawRect(petalColor, Offset(2 * u, 1 * v), Size(6 * u, 2 * v))
+            drawRect(petalColor, Offset(2 * u, 9 * v), Size(6 * u, 2 * v))
+            drawRect(petalColor, Offset(1 * u, 2 * v), Size(2 * u, 8 * v))
+            drawRect(petalColor, Offset(7 * u, 2 * v), Size(2 * u, 8 * v))
+            // Seed center
+            drawRect(centerColor, Offset(3 * u, 3 * v), Size(4 * u, 6 * v))
+        } else {
+            val px = size.width / 10f
+            val py = size.height / 12f
 
-        // Top hanger
-        drawRect(capColor, Offset(4 * px, 0 * py), Size(2 * px, 1 * py))
-        drawRect(capColor, Offset(3 * px, 1 * py), Size(4 * px, 1 * py))
-        drawRect(capColor, Offset(2 * px, 2 * py), Size(6 * px, 1 * py))
+            val capColor = if (isLit) Color(0xFFA36724) else Color(0xFF332B50)
+            val bodyColor = if (isLit) LanternAmber else Color(0xFF433D6B)
+            val glowColor = if (isLit) LanternGlow else Color(0xFF5B52A8)
 
-        // Glass Body
-        drawRect(bodyColor, Offset(1 * px, 3 * py), Size(8 * px, 6 * py))
-        // Center Glow
-        drawRect(glowColor, Offset(3 * px, 4 * py), Size(4 * px, 4 * py))
+            // Top hanger
+            drawRect(capColor, Offset(4 * px, 0 * py), Size(2 * px, 1 * py))
+            drawRect(capColor, Offset(3 * px, 1 * py), Size(4 * px, 1 * py))
+            drawRect(capColor, Offset(2 * px, 2 * py), Size(6 * px, 1 * py))
 
-        // Bottom cap
-        drawRect(capColor, Offset(2 * px, 9 * py), Size(6 * px, 1 * py))
-        drawRect(capColor, Offset(3 * px, 10 * py), Size(4 * px, 1 * py))
-        drawRect(capColor, Offset(4 * px, 11 * py), Size(2 * px, 1 * py))
+            // Glass Body
+            drawRect(bodyColor, Offset(1 * px, 3 * py), Size(8 * px, 6 * py))
+            // Center Glow
+            drawRect(glowColor, Offset(3 * px, 4 * py), Size(4 * px, 4 * py))
+
+            // Bottom cap
+            drawRect(capColor, Offset(2 * px, 9 * py), Size(6 * px, 1 * py))
+            drawRect(capColor, Offset(3 * px, 10 * py), Size(4 * px, 1 * py))
+            drawRect(capColor, Offset(4 * px, 11 * py), Size(2 * px, 1 * py))
+        }
     }
 }
 
 /**
- * Large Hanging Lantern for Login Screen with string and orbiting glow pixels.
+ * Large Hanging Lantern (or Blooming Pixel Sunflower in Bloom Theme) for Login & Splash screens.
  */
 @Composable
 fun LargeHangingLantern(
     modifier: Modifier = Modifier,
 ) {
+    val bloom = isBloomTheme
     Canvas(modifier = modifier.size(100.dp, 120.dp)) {
         val w = size.width
-        val h = size.height
         val u = w / 20f
 
-        val cordColor = Color(0xFFA36724)
-        val capColor = Color(0xFFA36724)
-        val bodyColor = LanternAmber
-        val glowColor = LanternGlow
-        val emberColor = Color(0xFF8C581E)
+        if (bloom) {
+            val petalYellow = Color(0xFFFFD147)
+            val petalWarm = Color(0xFFF6B93B)
+            val coreBrown = Color(0xFF5D3B1A)
+            val stemGreen = Color(0xFF478A3B)
+            val leafLight = Color(0xFF72AC54)
+            val pinkPetal = Color(0xFFF482AA)
+            val skyPetal = Color(0xFFBDE2FA)
 
-        // Hanging string from top
-        drawRect(cordColor, Offset(9.5f * u, 0f), Size(1 * u, 5 * u))
+            // Leafy stem below flower
+            drawRect(stemGreen, Offset(9 * u, 13 * u), Size(2 * u, 9 * u))
+            drawRect(leafLight, Offset(5 * u, 16 * u), Size(4 * u, 2 * u))
+            drawRect(stemGreen, Offset(6 * u, 17 * u), Size(3 * u, 1 * u))
+            drawRect(leafLight, Offset(11 * u, 18 * u), Size(4 * u, 2 * u))
+            drawRect(stemGreen, Offset(11 * u, 19 * u), Size(3 * u, 1 * u))
 
-        // Top cap
-        drawRect(capColor, Offset(8 * u, 5 * u), Size(4 * u, 1 * u))
-        drawRect(capColor, Offset(7 * u, 6 * u), Size(6 * u, 1 * u))
-        drawRect(capColor, Offset(6 * u, 7 * u), Size(8 * u, 1 * u))
+            // Stepped sunflower blossom head
+            drawRect(petalYellow, Offset(6 * u, 3 * u), Size(8 * u, 11 * u))
+            drawRect(petalYellow, Offset(4 * u, 5 * u), Size(12 * u, 7 * u))
+            drawRect(petalWarm, Offset(7 * u, 4 * u), Size(6 * u, 9 * u))
+            drawRect(coreBrown, Offset(7 * u, 5.5f * u), Size(6 * u, 6 * u))
+            drawRect(Color(0xFF7B5028), Offset(8.5f * u, 7 * u), Size(3 * u, 3 * u))
 
-        // Lantern Body
-        drawRect(bodyColor, Offset(5 * u, 8 * u), Size(10 * u, 9 * u))
-        // Inner glowing core
-        drawRect(glowColor, Offset(7 * u, 9 * u), Size(6 * u, 7 * u))
-        drawRect(Color.White, Offset(8.5f * u, 10.5f * u), Size(3 * u, 4 * u))
+            // Orbiting pastel petals
+            drawRect(pinkPetal, Offset(1.5f * u, 4 * u), Size(1.5f * u, 1.5f * u))
+            drawRect(skyPetal, Offset(17 * u, 4.5f * u), Size(1.5f * u, 1.5f * u))
+            drawRect(skyPetal, Offset(2 * u, 12 * u), Size(1.5f * u, 1.5f * u))
+            drawRect(pinkPetal, Offset(16.5f * u, 12 * u), Size(1.5f * u, 1.5f * u))
+        } else {
+            val cordColor = Color(0xFFA36724)
+            val capColor = Color(0xFFA36724)
+            val bodyColor = LanternAmber
+            val glowColor = LanternGlow
+            val emberColor = Color(0xFF8C581E)
 
-        // Bottom cap
-        drawRect(capColor, Offset(6 * u, 17 * u), Size(8 * u, 1 * u))
-        drawRect(capColor, Offset(7 * u, 18 * u), Size(6 * u, 1 * u))
-        drawRect(capColor, Offset(8 * u, 19 * u), Size(4 * u, 1 * u))
-        drawRect(capColor, Offset(9 * u, 20 * u), Size(2 * u, 1 * u))
+            // Hanging string from top
+            drawRect(cordColor, Offset(9.5f * u, 0f), Size(1 * u, 5 * u))
 
-        // Orbiting ember pixels (as seen in Screenshot 3)
-        drawRect(emberColor, Offset(2 * u, 8 * u), Size(1.5f * u, 1.5f * u))
-        drawRect(emberColor, Offset(16.5f * u, 8 * u), Size(1.5f * u, 1.5f * u))
-        drawRect(emberColor, Offset(0.5f * u, 13 * u), Size(1.5f * u, 1.5f * u))
-        drawRect(emberColor, Offset(18f * u, 13 * u), Size(1.5f * u, 1.5f * u))
-        drawRect(emberColor, Offset(2 * u, 18 * u), Size(1.5f * u, 1.5f * u))
-        drawRect(emberColor, Offset(16.5f * u, 18 * u), Size(1.5f * u, 1.5f * u))
-        drawRect(emberColor, Offset(6 * u, 21 * u), Size(1.5f * u, 1.5f * u))
-        drawRect(emberColor, Offset(12.5f * u, 21 * u), Size(1.5f * u, 1.5f * u))
+            // Top cap
+            drawRect(capColor, Offset(8 * u, 5 * u), Size(4 * u, 1 * u))
+            drawRect(capColor, Offset(7 * u, 6 * u), Size(6 * u, 1 * u))
+            drawRect(capColor, Offset(6 * u, 7 * u), Size(8 * u, 1 * u))
+
+            // Lantern Body
+            drawRect(bodyColor, Offset(5 * u, 8 * u), Size(10 * u, 9 * u))
+            // Inner glowing core
+            drawRect(glowColor, Offset(7 * u, 9 * u), Size(6 * u, 7 * u))
+            drawRect(Color.White, Offset(8.5f * u, 10.5f * u), Size(3 * u, 4 * u))
+
+            // Bottom cap
+            drawRect(capColor, Offset(6 * u, 17 * u), Size(8 * u, 1 * u))
+            drawRect(capColor, Offset(7 * u, 18 * u), Size(6 * u, 1 * u))
+            drawRect(capColor, Offset(8 * u, 19 * u), Size(4 * u, 1 * u))
+            drawRect(capColor, Offset(9 * u, 20 * u), Size(2 * u, 1 * u))
+
+            // Orbiting ember pixels
+            drawRect(emberColor, Offset(2 * u, 8 * u), Size(1.5f * u, 1.5f * u))
+            drawRect(emberColor, Offset(16.5f * u, 8 * u), Size(1.5f * u, 1.5f * u))
+            drawRect(emberColor, Offset(0.5f * u, 13 * u), Size(1.5f * u, 1.5f * u))
+            drawRect(emberColor, Offset(18f * u, 13 * u), Size(1.5f * u, 1.5f * u))
+            drawRect(emberColor, Offset(2 * u, 18 * u), Size(1.5f * u, 1.5f * u))
+            drawRect(emberColor, Offset(16.5f * u, 18 * u), Size(1.5f * u, 1.5f * u))
+            drawRect(emberColor, Offset(6 * u, 21 * u), Size(1.5f * u, 1.5f * u))
+            drawRect(emberColor, Offset(12.5f * u, 21 * u), Size(1.5f * u, 1.5f * u))
+        }
     }
 }
 
 /**
- * 9x5 Pixel Moth Sprite with 2-frame flapping animation.
+ * 9x5 Pixel Moth Sprite (or Flapping Pixel Bee in Bloom Theme) with 2-frame animation.
  */
 @Composable
 fun PixelMoth(
     modifier: Modifier = Modifier,
     isAnimated: Boolean = true,
 ) {
+    val bloom = isBloomTheme
     val infiniteTransition = rememberInfiniteTransition(label = "mothFlap")
     val frame by infiniteTransition.animateFloat(
         initialValue = 0f,
@@ -129,107 +176,170 @@ fun PixelMoth(
 
     Canvas(modifier = modifier.size(24.dp, 14.dp)) {
         val u = size.width / 9f
-        val wingColor = Color(0xFFD3C5FF)
-        val bodyColor = Color(0xFFF4E4C1)
-
-        // Center body
-        drawRect(bodyColor, Offset(4 * u, 1 * u), Size(1 * u, 3 * u))
-        // Antennae
-        drawRect(bodyColor, Offset(3.5f * u, 0f), Size(0.5f * u, 1 * u))
-        drawRect(bodyColor, Offset(5 * u, 0f), Size(0.5f * u, 1 * u))
-
-        if (isWingsUp) {
-            // Frame 1: Wings angled up
-            drawRect(wingColor, Offset(0 * u, 0 * u), Size(3 * u, 1 * u))
-            drawRect(wingColor, Offset(1 * u, 1 * u), Size(3 * u, 1 * u))
-            drawRect(wingColor, Offset(2 * u, 2 * u), Size(2 * u, 1 * u))
-
-            drawRect(wingColor, Offset(6 * u, 0 * u), Size(3 * u, 1 * u))
-            drawRect(wingColor, Offset(5 * u, 1 * u), Size(3 * u, 1 * u))
-            drawRect(wingColor, Offset(5 * u, 2 * u), Size(2 * u, 1 * u))
+        if (bloom) {
+            val yellow = Color(0xFFFFD147)
+            val stripe = Color(0xFF241D15)
+            val wing = Color(0xFFBDE2FA)
+            // Pixel bee body facing right
+            drawRect(yellow, Offset(2 * u, 2 * u), Size(5 * u, 2.4f * u))
+            drawRect(stripe, Offset(3.2f * u, 2 * u), Size(0.9f * u, 2.4f * u))
+            drawRect(stripe, Offset(5.1f * u, 2 * u), Size(0.9f * u, 2.4f * u))
+            drawRect(stripe, Offset(7.4f * u, 2.6f * u), Size(0.7f * u, 0.9f * u)) // eye/stinger accent
+            // Wings flutter above body
+            if (isWingsUp) {
+                drawRect(wing, Offset(2.8f * u, 0.3f * u), Size(2.2f * u, 1.7f * u))
+                drawRect(wing, Offset(4.4f * u, 0.7f * u), Size(2.0f * u, 1.3f * u))
+            } else {
+                drawRect(wing, Offset(2.2f * u, 1.0f * u), Size(2.5f * u, 1.0f * u))
+                drawRect(wing, Offset(4.8f * u, 1.1f * u), Size(2.0f * u, 0.9f * u))
+            }
         } else {
-            // Frame 2: Wings horizontal/flat
-            drawRect(wingColor, Offset(0 * u, 1 * u), Size(4 * u, 1 * u))
-            drawRect(wingColor, Offset(1 * u, 2 * u), Size(3 * u, 1 * u))
-            drawRect(wingColor, Offset(2 * u, 3 * u), Size(2 * u, 1 * u))
+            val wingColor = Color(0xFFD3C5FF)
+            val bodyColor = Color(0xFFF4E4C1)
 
-            drawRect(wingColor, Offset(5 * u, 1 * u), Size(4 * u, 1 * u))
-            drawRect(wingColor, Offset(5 * u, 2 * u), Size(3 * u, 1 * u))
-            drawRect(wingColor, Offset(5 * u, 3 * u), Size(2 * u, 1 * u))
+            // Center body
+            drawRect(bodyColor, Offset(4 * u, 1 * u), Size(1 * u, 3 * u))
+            // Antennae
+            drawRect(bodyColor, Offset(3.5f * u, 0f), Size(0.5f * u, 1 * u))
+            drawRect(bodyColor, Offset(5 * u, 0f), Size(0.5f * u, 1 * u))
+
+            if (isWingsUp) {
+                // Frame 1: Wings angled up
+                drawRect(wingColor, Offset(0 * u, 0 * u), Size(3 * u, 1 * u))
+                drawRect(wingColor, Offset(1 * u, 1 * u), Size(3 * u, 1 * u))
+                drawRect(wingColor, Offset(2 * u, 2 * u), Size(2 * u, 1 * u))
+
+                drawRect(wingColor, Offset(6 * u, 0 * u), Size(3 * u, 1 * u))
+                drawRect(wingColor, Offset(5 * u, 1 * u), Size(3 * u, 1 * u))
+                drawRect(wingColor, Offset(5 * u, 2 * u), Size(2 * u, 1 * u))
+            } else {
+                // Frame 2: Wings horizontal/flat
+                drawRect(wingColor, Offset(0 * u, 1 * u), Size(4 * u, 1 * u))
+                drawRect(wingColor, Offset(1 * u, 2 * u), Size(3 * u, 1 * u))
+                drawRect(wingColor, Offset(2 * u, 3 * u), Size(2 * u, 1 * u))
+
+                drawRect(wingColor, Offset(5 * u, 1 * u), Size(4 * u, 1 * u))
+                drawRect(wingColor, Offset(5 * u, 2 * u), Size(3 * u, 1 * u))
+                drawRect(wingColor, Offset(5 * u, 3 * u), Size(2 * u, 1 * u))
+            }
         }
     }
 }
 
 /**
- * Pixel Wax Seal (used on View-Once cards and Send button).
+ * Pixel Wax Seal (or Pink Blossom Seal in Bloom Theme).
  */
 @Composable
 fun PixelWaxSeal(
     modifier: Modifier = Modifier,
     hasArrow: Boolean = false,
 ) {
+    val bloom = isBloomTheme
     Canvas(modifier = modifier.size(24.dp, 24.dp)) {
         val u = size.width / 8f
-        val mainRed = WaxSealRed
-        val darkEdge = WaxSealDarkEdge
-        val white = Color.White
+        if (bloom) {
+            val petalPink = Color(0xFFF482AA)
+            val deepRose = Color(0xFFB83E6F)
+            val highlight = Color(0xFFFFFDF7)
 
-        // Outer notched red seal
-        drawRect(darkEdge, Offset(2 * u, 0 * u), Size(4 * u, 8 * u))
-        drawRect(darkEdge, Offset(0 * u, 2 * u), Size(8 * u, 4 * u))
-        drawRect(darkEdge, Offset(1 * u, 1 * u), Size(6 * u, 6 * u))
+            // Outer notched rose blossom
+            drawRect(deepRose, Offset(2 * u, 0 * u), Size(4 * u, 8 * u))
+            drawRect(deepRose, Offset(0 * u, 2 * u), Size(8 * u, 4 * u))
+            drawRect(deepRose, Offset(1 * u, 1 * u), Size(6 * u, 6 * u))
 
-        // Inner fill
-        drawRect(mainRed, Offset(2 * u, 1 * u), Size(4 * u, 6 * u))
-        drawRect(mainRed, Offset(1 * u, 2 * u), Size(6 * u, 4 * u))
+            // Bright pink inner blossom petals
+            drawRect(petalPink, Offset(2 * u, 0 * u), Size(4 * u, 6.5f * u))
+            drawRect(petalPink, Offset(0.5f * u, 1.5f * u), Size(6.5f * u, 4.5f * u))
+            drawRect(petalPink, Offset(1 * u, 1 * u), Size(5 * u, 5 * u))
 
-        if (hasArrow) {
-            // White pixel arrow (➜)
-            drawRect(white, Offset(2 * u, 3 * u), Size(4 * u, 2 * u))
-            drawRect(white, Offset(4 * u, 2 * u), Size(1 * u, 4 * u))
-            drawRect(white, Offset(5 * u, 2.5f * u), Size(1 * u, 3 * u))
+            // Delicate white blossom swirl / arrow highlights
+            drawRect(highlight, Offset(2.2f * u, 2.2f * u), Size(2.4f * u, 1 * u))
+            drawRect(highlight, Offset(3.4f * u, 3.6f * u), Size(2.4f * u, 1 * u))
+            drawRect(highlight, Offset(3.6f * u, 4.6f * u), Size(1.0f * u, 1.8f * u))
         } else {
-            // Center emblem dot
-            drawRect(Color(0xFFFFAE9E), Offset(3 * u, 2.5f * u), Size(2 * u, 2 * u))
+            val mainRed = WaxSealRed
+            val darkEdge = WaxSealDarkEdge
+            val white = Color.White
+
+            // Outer notched red seal
+            drawRect(darkEdge, Offset(2 * u, 0 * u), Size(4 * u, 8 * u))
+            drawRect(darkEdge, Offset(0 * u, 2 * u), Size(8 * u, 4 * u))
+            drawRect(darkEdge, Offset(1 * u, 1 * u), Size(6 * u, 6 * u))
+
+            // Inner fill
+            drawRect(mainRed, Offset(2 * u, 1 * u), Size(4 * u, 6 * u))
+            drawRect(mainRed, Offset(1 * u, 2 * u), Size(6 * u, 4 * u))
+
+            if (hasArrow) {
+                // White pixel arrow
+                drawRect(white, Offset(2 * u, 3 * u), Size(4 * u, 2 * u))
+                drawRect(white, Offset(4 * u, 2 * u), Size(1 * u, 4 * u))
+                drawRect(white, Offset(5 * u, 2.5f * u), Size(1 * u, 3 * u))
+            } else {
+                // Center emblem dot
+                drawRect(Color(0xFFFFAE9E), Offset(3 * u, 2.5f * u), Size(2 * u, 2 * u))
+            }
         }
     }
 }
 
 /**
- * Pixel Crescent Moon (as seen in chat background bottom right).
+ * Pixel Crescent Moon (or Golden 4-Petal Blossom in Bloom Theme).
  */
 @Composable
 fun PixelCrescentMoon(
     modifier: Modifier = Modifier,
 ) {
+    val bloom = isBloomTheme
     Canvas(modifier = modifier.size(16.dp, 20.dp)) {
-        val u = size.width / 6f
-        val v = size.height / 8f
-        val moonColor = Color(0xFFFFE8A3)
+        if (bloom) {
+            val u = size.width / 6f
+            val gold = Color(0xFFFFD147)
+            drawRect(gold, Offset(2 * u, 1.5f * u), Size(2 * u, 6 * u))
+            drawRect(gold, Offset(0.5f * u, 3 * u), Size(5 * u, 2.5f * u))
+        } else {
+            val u = size.width / 6f
+            val v = size.height / 8f
+            val moonColor = Color(0xFFFFE8A3)
 
-        drawRect(moonColor, Offset(2 * u, 0 * v), Size(3 * u, 1 * v))
-        drawRect(moonColor, Offset(1 * u, 1 * v), Size(2 * u, 1 * v))
-        drawRect(moonColor, Offset(0 * u, 2 * v), Size(2 * u, 4 * v))
-        drawRect(moonColor, Offset(1 * u, 6 * v), Size(2 * u, 1 * v))
-        drawRect(moonColor, Offset(2 * u, 7 * v), Size(3 * u, 1 * v))
+            drawRect(moonColor, Offset(2 * u, 0 * v), Size(3 * u, 1 * v))
+            drawRect(moonColor, Offset(1 * u, 1 * v), Size(2 * u, 1 * v))
+            drawRect(moonColor, Offset(0 * u, 2 * v), Size(2 * u, 4 * v))
+            drawRect(moonColor, Offset(1 * u, 6 * v), Size(2 * u, 1 * v))
+            drawRect(moonColor, Offset(2 * u, 7 * v), Size(3 * u, 1 * v))
+        }
     }
 }
 
 /**
- * Pixel Firefly for reaction chip.
+ * Pixel Firefly (or Tiny Pixel Bee in Bloom Theme) for reaction chip.
  */
 @Composable
 fun PixelFirefly(
     modifier: Modifier = Modifier,
 ) {
+    val bloom = isBloomTheme
     Canvas(modifier = modifier.size(12.dp, 12.dp)) {
-        val u = size.width / 4f
-        val color = LanternAmber
-        val center = Color.White
+        if (bloom) {
+            val u = size.width / 6f
+            val wing = Color(0xFFBDE2FA)
+            val yellow = Color(0xFFFFD147)
+            val stripe = Color(0xFF241D15)
+            // Tiny wings
+            drawRect(wing, Offset(1.2f * u, 0.8f * u), Size(3.6f * u, 1.4f * u))
+            // Striped yellow/black body
+            drawRect(yellow, Offset(0.8f * u, 2.2f * u), Size(4.4f * u, 2.6f * u))
+            drawRect(stripe, Offset(1.8f * u, 2.2f * u), Size(0.9f * u, 2.6f * u))
+            drawRect(stripe, Offset(3.5f * u, 2.2f * u), Size(0.9f * u, 2.6f * u))
+        } else {
+            val u = size.width / 4f
+            val color = LanternAmber
+            val center = Color.White
 
-        drawRect(color, Offset(1 * u, 0 * u), Size(2 * u, 4 * u))
-        drawRect(color, Offset(0 * u, 1 * u), Size(4 * u, 2 * u))
-        drawRect(center, Offset(1.5f * u, 1.5f * u), Size(1 * u, 1 * u))
+            drawRect(color, Offset(1 * u, 0 * u), Size(2 * u, 4 * u))
+            drawRect(color, Offset(0 * u, 1 * u), Size(4 * u, 2 * u))
+            drawRect(center, Offset(1.5f * u, 1.5f * u), Size(1 * u, 1 * u))
+        }
     }
 }
 
@@ -800,23 +910,36 @@ fun PixelViewOnceIcon(
     active: Boolean = false,
     modifier: Modifier = Modifier,
 ) {
+    val bloom = isBloomTheme
     Canvas(modifier = modifier.size(18.dp)) {
         val u = size.width / 10f
-        val ringColor = if (active) LanternAmber else tint
-        // Left solid half-arc segments
-        drawRect(ringColor, Offset(2.2f * u, 1.0f * u), Size(2.5f * u, 0.9f * u))
-        drawRect(ringColor, Offset(1.0f * u, 2.0f * u), Size(1.1f * u, 6.0f * u))
-        drawRect(ringColor, Offset(2.2f * u, 8.1f * u), Size(2.5f * u, 0.9f * u))
-        // Right dashed segments
-        drawRect(ringColor, Offset(5.6f * u, 1.0f * u), Size(2.0f * u, 0.9f * u))
-        drawRect(ringColor, Offset(8.0f * u, 2.3f * u), Size(1.0f * u, 1.4f * u))
-        drawRect(ringColor, Offset(8.0f * u, 4.4f * u), Size(1.0f * u, 1.4f * u))
-        drawRect(ringColor, Offset(8.0f * u, 6.5f * u), Size(1.0f * u, 1.4f * u))
-        drawRect(ringColor, Offset(5.6f * u, 8.1f * u), Size(2.0f * u, 0.9f * u))
-        // Numeral "1" inside
-        drawRect(ringColor, Offset(4.7f * u, 3.0f * u), Size(1.0f * u, 4.0f * u))
-        drawRect(ringColor, Offset(3.8f * u, 3.3f * u), Size(1.0f * u, 0.9f * u))
-        drawRect(ringColor, Offset(3.8f * u, 6.2f * u), Size(2.6f * u, 0.8f * u))
+        if (bloom) {
+            val petalColor = if (active) Color(0xFFF482AA) else tint
+            val stemColor = if (active) Color(0xFF478A3B) else tint
+            // Pink pixel tulip bud
+            drawRect(petalColor, Offset(3.5f * u, 1.2f * u), Size(1.1f * u, 1.4f * u))
+            drawRect(petalColor, Offset(5.4f * u, 1.2f * u), Size(1.1f * u, 1.4f * u))
+            drawRect(petalColor, Offset(3.2f * u, 2.4f * u), Size(3.6f * u, 2.8f * u))
+            // Green calyx & stem
+            drawRect(stemColor, Offset(3.2f * u, 5.2f * u), Size(3.6f * u, 1.1f * u))
+            drawRect(stemColor, Offset(4.4f * u, 6.2f * u), Size(1.2f * u, 2.8f * u))
+        } else {
+            val ringColor = if (active) LanternAmber else tint
+            // Left solid half-arc segments
+            drawRect(ringColor, Offset(2.2f * u, 1.0f * u), Size(2.5f * u, 0.9f * u))
+            drawRect(ringColor, Offset(1.0f * u, 2.0f * u), Size(1.1f * u, 6.0f * u))
+            drawRect(ringColor, Offset(2.2f * u, 8.1f * u), Size(2.5f * u, 0.9f * u))
+            // Right dashed segments
+            drawRect(ringColor, Offset(5.6f * u, 1.0f * u), Size(2.0f * u, 0.9f * u))
+            drawRect(ringColor, Offset(8.0f * u, 2.3f * u), Size(1.0f * u, 1.4f * u))
+            drawRect(ringColor, Offset(8.0f * u, 4.4f * u), Size(1.0f * u, 1.4f * u))
+            drawRect(ringColor, Offset(8.0f * u, 6.5f * u), Size(1.0f * u, 1.4f * u))
+            drawRect(ringColor, Offset(5.6f * u, 8.1f * u), Size(2.0f * u, 0.9f * u))
+            // Numeral "1" inside
+            drawRect(ringColor, Offset(4.7f * u, 3.0f * u), Size(1.0f * u, 4.0f * u))
+            drawRect(ringColor, Offset(3.8f * u, 3.3f * u), Size(1.0f * u, 0.9f * u))
+            drawRect(ringColor, Offset(3.8f * u, 6.2f * u), Size(2.6f * u, 0.8f * u))
+        }
     }
 }
 
@@ -1004,26 +1127,30 @@ fun PixelMuteBellIcon(
 fun PixelStarfield(
     modifier: Modifier = Modifier,
 ) {
+    val bloom = isBloomTheme
     Canvas(modifier = modifier.fillMaxSize()) {
         val w = size.width
         val h = size.height
 
+        val primaryColor = if (bloom) Color(0xFFF6C5D6) else StarYellow
+        val secondaryColor = if (bloom) Color(0xFFCAE5F5) else MutedText
+
         val starPositions = listOf(
-            Offset(0.15f * w, 0.08f * h) to StarYellow,
-            Offset(0.70f * w, 0.07f * h) to MutedText,
-            Offset(0.85f * w, 0.12f * h) to StarYellow,
-            Offset(0.08f * w, 0.22f * h) to MutedText,
-            Offset(0.78f * w, 0.23f * h) to MutedText,
-            Offset(0.28f * w, 0.35f * h) to StarYellow,
-            Offset(0.75f * w, 0.42f * h) to StarYellow,
-            Offset(0.18f * w, 0.54f * h) to MutedText,
-            Offset(0.86f * w, 0.45f * h) to MutedText,
-            Offset(0.29f * w, 0.57f * h) to StarYellow,
-            Offset(0.63f * w, 0.64f * h) to StarYellow,
-            Offset(0.88f * w, 0.63f * h) to StarYellow,
-            Offset(0.77f * w, 0.74f * h) to MutedText,
-            Offset(0.22f * w, 0.88f * h) to StarYellow,
-            Offset(0.82f * w, 0.90f * h) to MutedText,
+            Offset(0.15f * w, 0.08f * h) to primaryColor,
+            Offset(0.70f * w, 0.07f * h) to secondaryColor,
+            Offset(0.85f * w, 0.12f * h) to primaryColor,
+            Offset(0.08f * w, 0.22f * h) to secondaryColor,
+            Offset(0.78f * w, 0.23f * h) to secondaryColor,
+            Offset(0.28f * w, 0.35f * h) to primaryColor,
+            Offset(0.75f * w, 0.42f * h) to primaryColor,
+            Offset(0.18f * w, 0.54f * h) to secondaryColor,
+            Offset(0.86f * w, 0.45f * h) to secondaryColor,
+            Offset(0.29f * w, 0.57f * h) to primaryColor,
+            Offset(0.63f * w, 0.64f * h) to primaryColor,
+            Offset(0.88f * w, 0.63f * h) to primaryColor,
+            Offset(0.77f * w, 0.74f * h) to secondaryColor,
+            Offset(0.22f * w, 0.88f * h) to primaryColor,
+            Offset(0.82f * w, 0.90f * h) to secondaryColor,
         )
 
         for ((pos, color) in starPositions) {
@@ -1033,7 +1160,7 @@ fun PixelStarfield(
 }
 
 /**
- * Row of 10 burning ember squares for disappearing messages.
+ * Row of 10 burning ember squares (or pink petals in Bloom Theme) for disappearing messages.
  */
 @Composable
 fun DisappearingEmbers(
@@ -1041,6 +1168,7 @@ fun DisappearingEmbers(
     litCount: Int,
     modifier: Modifier = Modifier,
 ) {
+    val litColor = if (isBloomTheme) MyBubbleFill else LanternAmber
     Row(
         modifier = modifier,
         horizontalArrangement = Arrangement.spacedBy(3.dp),
@@ -1051,7 +1179,7 @@ fun DisappearingEmbers(
             Box(
                 modifier = Modifier
                     .size(6.dp)
-                    .background(if (isLit) LanternAmber else MothDivider),
+                    .background(if (isLit) litColor else MothEmberUnlit),
             )
         }
     }

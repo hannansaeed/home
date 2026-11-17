@@ -32,11 +32,17 @@ private enum class SettingsCategory(
     val subtitle: String,
 ) {
     PROFILE("profile", "username, passphrase, bio & avatar"),
-    APPEARANCE("appearance", "lantern hue & message font size"),
+    APPEARANCE("appearance", "theme, lantern hue, font & size"),
     PRIVACY("privacy", "screenshots, typing, read receipts & pin"),
     NOTIFICATIONS("notifications", "message alerts, calls & previews"),
     DATA_STORAGE("data and storage", "media usage, cache & call logs"),
     CONTACTS("friends / contacts", "your saved handles & active status"),
+    ;
+
+    fun localizedSubtitle(): String = when {
+        this == APPEARANCE && isBloomTheme -> "theme, flower hue, font & size"
+        else -> subtitle
+    }
 }
 
 @Composable
@@ -132,7 +138,7 @@ fun MothProfileView(
                         color = LanternAmber,
                     )
                     Text(
-                        text = "lantern identity, privacy & storage",
+                        text = if (isBloomTheme) "garden identity, privacy & storage" else "lantern identity, privacy & storage",
                         fontFamily = PixelifySans,
                         fontSize = 12.sp,
                         color = MutedText,
@@ -188,7 +194,7 @@ fun MothProfileView(
                                 ) {
                                     Box(modifier = Modifier.size(6.dp).background(SecureGreen))
                                     Text(
-                                        text = "lantern lit • active",
+                                        text = if (isBloomTheme) "flower blooming • rooted" else "lantern lit • active",
                                         fontFamily = PixelifySans,
                                         fontSize = 12.sp,
                                         color = SecureGreen,
@@ -239,7 +245,7 @@ fun MothProfileView(
                         Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MothDivider))
                         SettingsCategoryRow(
                             title = SettingsCategory.APPEARANCE.title,
-                            subtitle = SettingsCategory.APPEARANCE.subtitle,
+                            subtitle = SettingsCategory.APPEARANCE.localizedSubtitle(),
                             testTag = "settings_category_appearance",
                             icon = { PixelPaletteIcon(tint = LanternAmber, modifier = Modifier.size(18.dp)) },
                             onClick = { activeCategory = SettingsCategory.APPEARANCE },
@@ -271,7 +277,7 @@ fun MothProfileView(
                         Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MothDivider))
                         SettingsCategoryRow(
                             title = SettingsCategory.CONTACTS.title,
-                            subtitle = "${friendsList.size} saved lantern contacts",
+                            subtitle = if (isBloomTheme) "${friendsList.size} saved garden contacts" else "${friendsList.size} saved lantern contacts",
                             testTag = "settings_category_contacts",
                             icon = { PixelUsersIcon(tint = Color(0xFF70D6FF), modifier = Modifier.size(18.dp)) },
                             onClick = { activeCategory = SettingsCategory.CONTACTS },
@@ -279,10 +285,10 @@ fun MothProfileView(
                     }
                 }
 
-                // Extinguish Lantern / Sign Out
+                // Extinguish Lantern / Wither Flower / Sign Out
                 if (!showLogoutConfirm) {
                     SteppedButton(
-                        text = "extinguish lantern (log out)",
+                        text = if (isBloomTheme) "flower withering (log out)" else "extinguish lantern (log out)",
                         onClick = { showLogoutConfirm = true },
                         backgroundColor = WaxSealRed,
                         borderColor = WaxSealDarkEdge,
@@ -304,7 +310,7 @@ fun MothProfileView(
                             verticalArrangement = Arrangement.spacedBy(10.dp),
                         ) {
                             Text(
-                                text = "extinguish your lantern?",
+                                text = if (isBloomTheme) "let your flower wither?" else "extinguish your lantern?",
                                 fontFamily = PixelifySans,
                                 fontWeight = FontWeight.Bold,
                                 fontSize = 14.sp,
@@ -320,7 +326,7 @@ fun MothProfileView(
                                 horizontalArrangement = Arrangement.spacedBy(10.dp),
                             ) {
                                 SteppedButton(
-                                    text = "yes, extinguish",
+                                    text = if (isBloomTheme) "yes, wither" else "yes, extinguish",
                                     onClick = onSignOut,
                                     backgroundColor = WaxSealRed,
                                     borderColor = WaxSealDarkEdge,
@@ -328,7 +334,7 @@ fun MothProfileView(
                                     modifier = Modifier.testTag("confirm_sign_out_button"),
                                 )
                                 SteppedButton(
-                                    text = "keep lit",
+                                    text = if (isBloomTheme) "keep blooming" else "keep lit",
                                     onClick = { showLogoutConfirm = false },
                                     backgroundColor = TheirBubbleBorder,
                                     borderColor = MothDivider,
@@ -368,7 +374,7 @@ fun MothProfileView(
                             color = LanternAmber,
                         )
                         Text(
-                            text = category.subtitle,
+                            text = category.localizedSubtitle(),
                             fontFamily = PixelifySans,
                             fontSize = 11.sp,
                             color = MutedText,
@@ -542,7 +548,7 @@ fun MothProfileView(
                                         ) {
                                             if (editBio.isEmpty()) {
                                                 Text(
-                                                    text = "say something about your lantern...",
+                                                    text = if (isBloomTheme) "say something about your flower..." else "say something about your lantern...",
                                                     fontFamily = PixelifySans,
                                                     fontSize = 12.sp,
                                                     color = PlaceholderText,
@@ -688,7 +694,90 @@ fun MothProfileView(
                             ) {
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Text(
-                                        text = "lantern hue",
+                                        text = "theme",
+                                        fontFamily = PixelifySans,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 13.sp,
+                                        color = TheirBubbleText,
+                                    )
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                    ) {
+                                        AppThemeOption.entries.forEach { themeOption ->
+                                            val selected = state.selectedThemeId == themeOption.id
+                                            val swatchPalette = if (themeOption == AppThemeOption.FLOWER_BLOOM) {
+                                                FlowerBloomPalette
+                                            } else {
+                                                LanternNightPalette
+                                            }
+                                            val chipShape = SteppedCornerShape(3.dp)
+                                            Box(
+                                                modifier = Modifier
+                                                    .weight(1f)
+                                                    .background(
+                                                        if (selected) MyBubbleFill else MothBgDark,
+                                                        chipShape,
+                                                    )
+                                                    .border(
+                                                        width = 2.dp,
+                                                        color = if (selected) MyBubbleBorder else MothDivider,
+                                                        shape = chipShape,
+                                                    )
+                                                    .clickable { state.setAppTheme(themeOption) }
+                                                    .padding(horizontal = 10.dp, vertical = 10.dp)
+                                                    .testTag("app_theme_${themeOption.id}"),
+                                            ) {
+                                                Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                                    Row(
+                                                        horizontalArrangement = Arrangement.spacedBy(4.dp),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                    ) {
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(12.dp)
+                                                                .background(swatchPalette.bgDark)
+                                                                .border(1.dp, swatchPalette.divider),
+                                                        )
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(12.dp)
+                                                                .background(swatchPalette.theirBubbleFill)
+                                                                .border(1.dp, swatchPalette.theirBubbleBorder),
+                                                        )
+                                                        Box(
+                                                            modifier = Modifier
+                                                                .size(12.dp)
+                                                                .background(swatchPalette.myBubbleFill)
+                                                                .border(1.dp, swatchPalette.myBubbleBorder),
+                                                        )
+                                                    }
+                                                    Text(
+                                                        text = themeOption.label,
+                                                        fontFamily = PixelifySans,
+                                                        fontWeight = FontWeight.Bold,
+                                                        fontSize = 12.sp,
+                                                        color = if (selected) MyBubbleText else TheirBubbleText,
+                                                        maxLines = 1,
+                                                    )
+                                                    Text(
+                                                        text = themeOption.subtitle,
+                                                        fontFamily = PixelifySans,
+                                                        fontSize = 10.sp,
+                                                        color = if (selected) MyBubbleText.copy(alpha = 0.78f) else MutedText,
+                                                        maxLines = 1,
+                                                    )
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MothDivider))
+
+                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                    Text(
+                                        text = if (isBloomTheme) "flower hue" else "lantern hue",
                                         fontFamily = PixelifySans,
                                         fontWeight = FontWeight.Bold,
                                         fontSize = 13.sp,
@@ -747,6 +836,116 @@ fun MothProfileView(
                                         }
                                     }
 
+                                    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MothDivider))
+
+                                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                                        Text(
+                                            text = "app font",
+                                            fontFamily = PixelifySans,
+                                            fontWeight = FontWeight.Bold,
+                                            fontSize = 13.sp,
+                                            color = TheirBubbleText,
+                                        )
+                                        Text(
+                                            text = "pixel & retro",
+                                            fontFamily = PixelifySans,
+                                            fontSize = 11.sp,
+                                            color = MutedText,
+                                        )
+                                        val pixelFonts = AppFontOption.entries.filter { it.isPixelStyle }
+                                        pixelFonts.chunked(2).forEach { rowFonts ->
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            ) {
+                                                rowFonts.forEach { option ->
+                                                    val selected = state.selectedFontId == option.id
+                                                    val chipShape = SteppedCornerShape(3.dp)
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .weight(1f)
+                                                            .heightIn(min = 42.dp)
+                                                            .background(
+                                                                if (selected) MyBubbleFill else MothBgDark,
+                                                                chipShape,
+                                                            )
+                                                            .border(
+                                                                width = 2.dp,
+                                                                color = if (selected) MyBubbleBorder else MothDivider,
+                                                                shape = chipShape,
+                                                            )
+                                                            .clickable { state.setAppFont(option) }
+                                                            .padding(horizontal = 8.dp, vertical = 8.dp)
+                                                            .testTag("app_font_${option.id}"),
+                                                        contentAlignment = Alignment.Center,
+                                                    ) {
+                                                        Text(
+                                                            text = option.label,
+                                                            fontFamily = option.fontFamily,
+                                                            fontWeight = FontWeight.Bold,
+                                                            fontSize = 12.sp,
+                                                            color = if (selected) MyBubbleText else TheirBubbleText,
+                                                            maxLines = 1,
+                                                        )
+                                                    }
+                                                }
+                                                if (rowFonts.size == 1) {
+                                                    Spacer(modifier = Modifier.weight(1f))
+                                                }
+                                            }
+                                        }
+
+                                        Text(
+                                            text = "normal",
+                                            fontFamily = PixelifySans,
+                                            fontSize = 11.sp,
+                                            color = MutedText,
+                                            modifier = Modifier.padding(top = 4.dp),
+                                        )
+                                        val normalFonts = AppFontOption.entries.filter { !it.isPixelStyle }
+                                        normalFonts.chunked(2).forEach { rowFonts ->
+                                            Row(
+                                                modifier = Modifier.fillMaxWidth(),
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            ) {
+                                                rowFonts.forEach { option ->
+                                                    val selected = state.selectedFontId == option.id
+                                                    val chipShape = SteppedCornerShape(3.dp)
+                                                    Box(
+                                                        modifier = Modifier
+                                                            .weight(1f)
+                                                            .heightIn(min = 42.dp)
+                                                            .background(
+                                                                if (selected) MyBubbleFill else MothBgDark,
+                                                                chipShape,
+                                                            )
+                                                            .border(
+                                                                width = 2.dp,
+                                                                color = if (selected) MyBubbleBorder else MothDivider,
+                                                                shape = chipShape,
+                                                            )
+                                                            .clickable { state.setAppFont(option) }
+                                                            .padding(horizontal = 8.dp, vertical = 8.dp)
+                                                            .testTag("app_font_${option.id}"),
+                                                        contentAlignment = Alignment.Center,
+                                                    ) {
+                                                        Text(
+                                                            text = option.label,
+                                                            fontFamily = option.fontFamily,
+                                                            fontWeight = FontWeight.Bold,
+                                                            fontSize = 12.sp,
+                                                            color = if (selected) MyBubbleText else TheirBubbleText,
+                                                            maxLines = 1,
+                                                        )
+                                                    }
+                                                }
+                                                if (rowFonts.size == 1) {
+                                                    Spacer(modifier = Modifier.weight(1f))
+                                                }
+                                            }
+                                        }
+                                    }
+
                                     // Live preview bubble
                                     SteppedBox(
                                         modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
@@ -755,7 +954,11 @@ fun MothProfileView(
                                         cutSize = 4.dp,
                                     ) {
                                         Text(
-                                            text = "preview: moths gather around warm lanterns.",
+                                            text = if (isBloomTheme) {
+                                                "preview: spring petals bloom in warm sun."
+                                            } else {
+                                                "preview: moths gather around warm lanterns."
+                                            },
                                             fontFamily = PixelifySans,
                                             fontSize = (14f * state.messageFontScale).sp,
                                             lineHeight = (19f * state.messageFontScale).sp,
@@ -1082,7 +1285,7 @@ fun MothProfileView(
                                                             .background(if (isOnline) SecureGreen else MutedText),
                                                     )
                                                     Text(
-                                                        text = if (isOnline) "active" else "offline",
+                                                        text = if (isOnline) (if (isBloomTheme) "rooted" else "active") else "offline",
                                                         fontFamily = PixelifySans,
                                                         fontSize = 11.sp,
                                                         color = if (isOnline) SecureGreen else MutedText,
@@ -1110,7 +1313,7 @@ fun MothProfileView(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color(0x991A1633))
+                    .background(MothScrimSoft)
                     .clickable { showPinSetupDialog = false }
                     .padding(24.dp),
                 contentAlignment = Alignment.Center,
@@ -1223,7 +1426,7 @@ fun MothProfileView(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color(0x991A1633))
+                    .background(MothScrimSoft)
                     .clickable { showAvatarOptions = false }
                     .padding(24.dp),
                 contentAlignment = Alignment.Center,

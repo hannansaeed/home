@@ -1717,7 +1717,7 @@ private fun SharedNotesActivityView(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color(0xBB1A1633))
+                    .background(MothScrimStrong)
                     .clickable { deleteConfirmTarget = null }
                     .padding(20.dp),
                 contentAlignment = Alignment.Center,
@@ -1789,7 +1789,7 @@ private fun SharedNotesActivityView(
             Box(
                 modifier = Modifier
                     .fillMaxSize()
-                    .background(Color(0xBB1A1633))
+                    .background(MothScrimStrong)
                     .clickable { pendingLeaveAction = null }
                     .padding(20.dp),
                 contentAlignment = Alignment.Center,

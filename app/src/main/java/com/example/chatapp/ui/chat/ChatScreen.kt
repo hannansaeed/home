@@ -318,8 +318,10 @@ fun ChatScreen(
         }
     }
 
-    DisposableEffect(activeChatId) {
+    DisposableEffect(activeChatId, cleanChatTitle) {
+        state.markChatScreenVisible(activeChatId, cleanChatTitle)
         onDispose {
+            state.clearChatScreenVisible(activeChatId)
             state.updateMyTypingStatus(activeChatId, false)
             state.voiceRecorder.cancelRecording()
             state.voicePlayer.stop()
@@ -570,840 +572,211 @@ fun ChatScreen(
                 .background(MothBgDark)
                 .testTag("chat_screen"),
         ) {
-            // 1. Header (Normal Contact Bar OR Contextual WhatsApp-style Action Bar when message selected)
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MothHeaderBg)
-                    .statusBarsPadding()
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-            ) {
-                if (selectedMessages.isNotEmpty()) {
-                    val singleSelected = selectedMessages.singleOrNull()
-                    val nonDeletedSelected = selectedMessages.filter { !it.isDeleted }
-                    val allStarred = nonDeletedSelected.isNotEmpty() && nonDeletedSelected.all { it.isStarred }
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .testTag("contextual_action_bar"),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .clickable { selectedMessageIds = emptySet() }
-                                    .testTag("contextual_close_button"),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                PixelBackArrowIcon(tint = LanternAmber, modifier = Modifier.size(24.dp))
-                            }
-                            Text(
-                                text = "${selectedMessages.size}",
-                                fontFamily = PixelifySans,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 16.sp,
-                                color = LanternAmber,
-                                modifier = Modifier.testTag("contextual_selected_count"),
-                            )
-                        }
-
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            if (nonDeletedSelected.isNotEmpty()) {
-                                val copyableTexts = nonDeletedSelected.mapNotNull { m -> m.text.takeIf { it.isNotBlank() } }
-                                if (copyableTexts.isNotEmpty()) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(38.dp)
-                                            .clickable {
-                                                clipboardManager.setText(AnnotatedString(copyableTexts.joinToString("\n")))
-                                                selectedMessageIds = emptySet()
-                                                actionNotice = "copied"
-                                            }
-                                            .testTag("action_copy_top_button"),
-                                        contentAlignment = Alignment.Center,
-                                    ) {
-                                        PixelCopyIcon(tint = TheirBubbleText, modifier = Modifier.size(18.dp))
-                                    }
-                                }
-
-                                Box(
-                                    modifier = Modifier
-                                        .size(38.dp)
-                                        .clickable {
-                                            state.setMessagesStarred(
-                                                activeChatId,
-                                                nonDeletedSelected.map { it.id },
-                                                !allStarred,
-                                            )
-                                            selectedMessageIds = emptySet()
-                                        }
-                                        .testTag("action_star_button"),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    PixelStarIcon(tint = LanternAmber, filled = allStarred, modifier = Modifier.size(18.dp))
-                                }
-
-                                Box(
-                                    modifier = Modifier
-                                        .size(38.dp)
-                                        .clickable {
-                                            forwardModalMessages = nonDeletedSelected
-                                            selectedMessageIds = emptySet()
-                                        }
-                                        .testTag("action_forward_button"),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    PixelForwardIcon(tint = TheirBubbleText, modifier = Modifier.size(18.dp))
-                                }
-                            }
-
-                            Box(
-                                modifier = Modifier
-                                    .size(38.dp)
-                                    .clickable {
-                                        deleteTargetMessages = selectedMessages
-                                        selectedMessageIds = emptySet()
-                                    }
-                                    .testTag("action_delete_button"),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                PixelTrashIcon(tint = WaxSealRed, modifier = Modifier.size(18.dp))
-                            }
-                        }
+            ChatScreenHeader(
+                selectedMessages = selectedMessages,
+                activeConv = activeConv,
+                cleanChatTitle = cleanChatTitle,
+                isGroup = isGroup,
+                cachedPresence = cachedPresence,
+                showInChatSearch = showInChatSearch,
+                onClearSelection = { selectedMessageIds = emptySet() },
+                onCopySelected = {
+                    val copyableTexts = selectedMessages
+                        .filter { !it.isDeleted }
+                        .mapNotNull { m -> m.text.takeIf { it.isNotBlank() } }
+                    if (copyableTexts.isNotEmpty()) {
+                        clipboardManager.setText(AnnotatedString(copyableTexts.joinToString("\n")))
+                        selectedMessageIds = emptySet()
+                        actionNotice = "copied"
                     }
-                } else {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        // Left: Back + Avatar + Title (Avatar/Name opens Contact Profile or Group Info)
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier.weight(1f),
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .clickable(onClick = onBack)
-                                    .testTag("chat_back_button"),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                PixelBackArrowIcon(
-                                    tint = LanternAmber,
-                                    modifier = Modifier.size(26.dp),
-                                )
-                            }
-
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                modifier = Modifier
-                                    .clickable {
-                                        if (isGroup) showGroupInfoModal = true else showContactProfileOverlay = true
-                                    }
-                                    .testTag("chat_header_profile_button"),
-                            ) {
-                                if (isGroup && activeConv != null) {
-                                    SteppedBox(
-                                        modifier = Modifier.size(36.dp),
-                                        backgroundColor = activeConv.avatarColor,
-                                        borderColor = LanternAmber,
-                                        cutSize = 3.dp,
-                                        borderWidth = 1.dp,
-                                    ) {
-                                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                            Text(text = activeConv.groupIcon, fontSize = 16.sp)
-                                        }
-                                    }
-                                } else {
-                                    UserAvatar(
-                                        avatarPath = activeConv?.avatarLocalPath,
-                                        color = activeConv?.avatarColor ?: LanternAmber,
-                                        size = 36.dp,
-                                    )
-                                }
-
-                                Column {
-                                    Text(
-                                        text = activeConv?.name ?: cleanChatTitle,
-                                        fontFamily = PixelifySans,
-                                        fontSize = 16.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = LanternAmber,
-                                        maxLines = 1,
-                                        overflow = TextOverflow.Ellipsis,
-                                    )
-                                    val presence = cachedPresence
-                                    Row(
-                                        verticalAlignment = Alignment.CenterVertically,
-                                        horizontalArrangement = Arrangement.spacedBy(5.dp),
-                                        modifier = Modifier.testTag("contact_presence_status"),
-                                    ) {
-                                        Box(
-                                            modifier = Modifier
-                                                .size(5.dp)
-                                                .background(if (presence.isOnline) SecureGreen else MutedText),
-                                        )
-                                        Text(
-                                            text = if (isGroup) "tap for members • ${presence.label}" else presence.label,
-                                            fontFamily = PixelifySans,
-                                            fontSize = 11.sp,
-                                            color = if (presence.isOnline) SecureGreen else MutedText,
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        // Right Actions: Voice Call (1:1) + In-Chat Search
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(4.dp),
-                        ) {
-                            if (!isGroup && !chatTitle.equals("support", ignoreCase = true)) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(38.dp)
-                                        .clickable { launchCallFromChat() }
-                                        .testTag("chat_voice_call_button"),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    PixelPhoneIcon(
-                                        tint = LanternAmber,
-                                        modifier = Modifier.size(22.dp),
-                                    )
-                                }
-                            }
-                            Box(
-                                modifier = Modifier
-                                    .size(40.dp)
-                                    .clickable {
-                                        showInChatSearch = !showInChatSearch
-                                        if (!showInChatSearch) inChatSearchQuery = ""
-                                    }
-                                    .testTag("in_chat_search_button"),
-                                contentAlignment = Alignment.Center,
-                            ) {
-                                PixelSearchIcon(
-                                    tint = if (showInChatSearch) TheirBubbleText else LanternAmber,
-                                    modifier = Modifier.size(20.dp),
-                                )
-                            }
-                        }
-                    }
-                }
-            }
+                },
+                onStarSelected = { star ->
+                    val nonDeletedIds = selectedMessages.filter { !it.isDeleted }.map { it.id }
+                    state.setMessagesStarred(activeChatId, nonDeletedIds, star)
+                    selectedMessageIds = emptySet()
+                },
+                onForwardSelected = { msgs ->
+                    forwardModalMessages = msgs
+                    selectedMessageIds = emptySet()
+                },
+                onDeleteSelected = { msgs ->
+                    deleteTargetMessages = msgs
+                    selectedMessageIds = emptySet()
+                },
+                onBack = onBack,
+                onOpenProfile = {
+                    if (isGroup) showGroupInfoModal = true else showContactProfileOverlay = true
+                },
+                onCallVoice = { launchCallFromChat() },
+                onToggleSearch = {
+                    showInChatSearch = !showInChatSearch
+                    if (!showInChatSearch) inChatSearchQuery = ""
+                },
+            )
             Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MothDivider))
 
-            // In-Chat Keyword Search Bar
-            AnimatedVisibility(visible = showInChatSearch) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MothHeaderBg)
-                        .border(1.dp, MothDivider)
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    SteppedBox(
-                        modifier = Modifier.weight(1f).height(34.dp),
-                        backgroundColor = MothBgDark,
-                        borderColor = TheirBubbleBorder,
-                        cutSize = 3.dp,
-                    ) {
-                        Box(
-                            modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
-                            contentAlignment = Alignment.CenterStart,
-                        ) {
-                            if (inChatSearchQuery.isEmpty()) {
-                                Text(
-                                    text = "search messages...",
-                                    fontFamily = PixelifySans,
-                                    fontSize = 12.sp,
-                                    color = PlaceholderText,
-                                )
-                            }
-                            BasicTextField(
-                                value = inChatSearchQuery,
-                                onValueChange = { inChatSearchQuery = it },
-                                textStyle = TextStyle(fontFamily = PixelifySans, fontSize = 13.sp, color = TheirBubbleText),
-                                cursorBrush = SolidColor(LanternAmber),
-                                singleLine = true,
-                                modifier = Modifier.fillMaxWidth().testTag("in_chat_search_input"),
-                            )
-                        }
+            ChatInChatSearchBar(
+                visible = showInChatSearch,
+                query = inChatSearchQuery,
+                matchCount = searchMatches.size,
+                cursorIdx = searchCursorIdx,
+                onQueryChange = { inChatSearchQuery = it },
+                onPrevMatch = {
+                    if (searchMatches.isNotEmpty()) {
+                        searchCursorIdx = if (searchCursorIdx > 0) searchCursorIdx - 1 else searchMatches.lastIndex
                     }
-                    if (inChatSearchQuery.isNotBlank()) {
-                        val counterText = if (searchMatches.isEmpty()) "0/0" else "${searchCursorIdx + 1}/${searchMatches.size}"
-                        Text(text = counterText, fontFamily = PixelifySans, fontSize = 11.sp, color = LanternAmber)
-                        Box(
-                            modifier = Modifier
-                                .size(32.dp)
-                                .clickable {
-                                    if (searchMatches.isNotEmpty()) {
-                                        searchCursorIdx = if (searchCursorIdx > 0) searchCursorIdx - 1 else searchMatches.lastIndex
-                                    }
-                                }
-                                .testTag("in_chat_search_prev"),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            PixelArrowUpIcon(tint = LanternAmber, modifier = Modifier.size(18.dp))
-                        }
-                        Box(
-                            modifier = Modifier
-                                .size(32.dp)
-                                .clickable {
-                                    if (searchMatches.isNotEmpty()) {
-                                        searchCursorIdx = (searchCursorIdx + 1) % searchMatches.size
-                                    }
-                                }
-                                .testTag("in_chat_search_next"),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            PixelArrowDownIcon(tint = LanternAmber, modifier = Modifier.size(18.dp))
-                        }
+                },
+                onNextMatch = {
+                    if (searchMatches.isNotEmpty()) {
+                        searchCursorIdx = (searchCursorIdx + 1) % searchMatches.size
                     }
-                    Text(
-                        text = "✕",
-                        fontSize = 13.sp,
-                        color = MutedText,
-                        modifier = Modifier
-                            .clickable {
-                                showInChatSearch = false
-                                inChatSearchQuery = ""
-                            }
-                            .padding(horizontal = 4.dp),
-                    )
-                }
-            }
+                },
+                onClose = {
+                    showInChatSearch = false
+                    inChatSearchQuery = ""
+                },
+            )
 
-            // Pinned Message Top Banner
-            if (pinnedMessages.isNotEmpty()) {
-                val safeIdx = pinnedBannerIdx.coerceIn(0, pinnedMessages.lastIndex)
-                val pinned = pinnedMessages[safeIdx]
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(TheirBubbleFill)
-                        .border(1.dp, LanternAmber)
-                        .clickable {
-                            jumpToMessage(pinned.id)
-                            if (pinnedMessages.size > 1) {
-                                pinnedBannerIdx = (safeIdx + 1) % pinnedMessages.size
-                            }
-                        }
-                        .padding(horizontal = 14.dp, vertical = 6.dp)
-                        .testTag("pinned_message_banner"),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                ) {
-                    Row(
-                        modifier = Modifier.weight(1f),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        PixelPinIcon(tint = LanternAmber, modifier = Modifier.size(14.dp))
-                        Text(
-                            text = pinned.text.ifBlank { pinned.attachmentName ?: "pinned message" },
-                            fontFamily = PixelifySans,
-                            fontSize = 12.sp,
-                            color = LanternAmber,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                    }
-                    Text(
-                        text = "unpin",
-                        fontFamily = PixelifySans,
-                        fontSize = 11.sp,
-                        color = MutedText,
-                        modifier = Modifier
-                            .clickable { unpinConfirmMessage = pinned }
-                            .padding(start = 8.dp)
-                            .testTag("unpin_banner_button"),
-                    )
-                }
-            }
+            ChatPinnedMessageBanner(
+                pinnedMessages = pinnedMessages,
+                pinnedBannerIdx = pinnedBannerIdx,
+                onTapPinned = { pinned, nextIdx ->
+                    jumpToMessage(pinned.id)
+                    pinnedBannerIdx = nextIdx
+                },
+                onRequestUnpin = { pinned -> unpinConfirmMessage = pinned },
+            )
 
-            // Active In-Chat Truth or Dare Bot Card (Discord-style bot embed)
             state.activeChatTodSession?.let { tod ->
-                SteppedBox(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(horizontal = 12.dp, vertical = 6.dp)
-                        .testTag("in_chat_tod_bot_card"),
-                    backgroundColor = MothHeaderBg,
-                    borderColor = if (tod.promptType == "DARE") WaxSealRed else LanternAmber,
-                    cutSize = 4.dp,
-                    borderWidth = 2.dp,
-                ) {
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .padding(horizontal = 12.dp, vertical = 10.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically,
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                modifier = Modifier.weight(1f),
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .background(SecureGreen)
-                                        .padding(horizontal = 5.dp, vertical = 1.dp),
-                                ) {
-                                    Text(
-                                        text = "BOT",
-                                        fontFamily = PixelifySans,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 10.sp,
-                                        color = MothBgDark,
-                                    )
-                                }
-                                Text(
-                                    text = "TOD • r${tod.roundNumber} • @${tod.turnUsername}",
-                                    fontFamily = PixelifySans,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 12.sp,
-                                    color = LanternAmber,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                            Text(
-                                text = "✕ remove",
-                                fontFamily = PixelifySans,
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 11.sp,
-                                color = WaxSealRed,
-                                modifier = Modifier
-                                    .clickable { state.removeTodBotFromChat(activeChatId) }
-                                    .padding(horizontal = 6.dp, vertical = 2.dp)
-                                    .testTag("remove_tod_bot_button"),
-                            )
-                        }
-
-                        if (tod.promptText.isNotBlank()) {
-                            Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                                Row(
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(6.dp),
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .background(if (tod.promptType == "DARE") WaxSealRed else TheirBubbleFill)
-                                            .border(1.dp, if (tod.promptType == "DARE") WaxSealDarkEdge else TheirBubbleBorder)
-                                            .padding(horizontal = 6.dp, vertical = 1.dp),
-                                    ) {
-                                        Text(
-                                            text = tod.promptType,
-                                            fontFamily = PixelifySans,
-                                            fontWeight = FontWeight.Bold,
-                                            fontSize = 10.sp,
-                                            color = Color.White,
-                                        )
-                                    }
-                                    if (tod.promptPickedBy.isNotBlank()) {
-                                        Text(
-                                            text = "by @${tod.promptPickedBy}",
-                                            fontFamily = PixelifySans,
-                                            fontSize = 10.sp,
-                                            color = MutedText,
-                                        )
-                                    }
-                                }
-                                Text(
-                                    text = tod.promptText,
-                                    fontFamily = PixelifySans,
-                                    fontSize = 13.sp,
-                                    color = TheirBubbleText,
-                                    lineHeight = 18.sp,
-                                )
-                            }
-                        } else {
-                            Text(
-                                text = "pick truth, dare, or random for @${tod.turnUsername}",
-                                fontFamily = PixelifySans,
-                                fontSize = 12.sp,
-                                color = MutedText,
-                            )
-                        }
-
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp),
-                        ) {
-                            SteppedButton(
-                                text = "truth",
-                                onClick = { state.playTodTurn(activeChatId, "TRUTH") },
-                                backgroundColor = TheirBubbleFill,
-                                borderColor = TheirBubbleBorder,
-                                textColor = TheirBubbleText,
-                                modifier = Modifier.weight(1f),
-                                cutSize = 2.dp,
-                            )
-                            SteppedButton(
-                                text = "dare",
-                                onClick = { state.playTodTurn(activeChatId, "DARE") },
-                                backgroundColor = WaxSealRed,
-                                borderColor = WaxSealDarkEdge,
-                                textColor = Color.White,
-                                modifier = Modifier.weight(1f),
-                                cutSize = 2.dp,
-                            )
-                            SteppedButton(
-                                text = "random",
-                                onClick = { state.playTodTurn(activeChatId, "RANDOM") },
-                                backgroundColor = MyBubbleFill,
-                                borderColor = MyBubbleBorder,
-                                textColor = MyBubbleText,
-                                modifier = Modifier.weight(1f),
-                                cutSize = 2.dp,
-                            )
-                            if (tod.promptText.isNotBlank()) {
-                                SteppedButton(
-                                    text = "next",
-                                    onClick = { state.advanceTodTurn(activeChatId) },
-                                    backgroundColor = SecureGreen,
-                                    borderColor = Color(0xFF4CA877),
-                                    textColor = MothBgDark,
-                                    modifier = Modifier.weight(1f),
-                                    cutSize = 2.dp,
-                                )
-                            }
-                        }
-                    }
-                }
+                ChatTodBotCard(
+                    tod = tod,
+                    onPlayTurn = { mode -> state.playTodTurn(activeChatId, mode) },
+                    onAdvanceTurn = { state.advanceTodTurn(activeChatId) },
+                    onRemove = { state.removeTodBotFromChat(activeChatId) },
+                )
             }
 
-            // 2. Chat Area with Starfield & Moon
-            Box(
+            ChatMessageFeed(
                 modifier = Modifier
                     .weight(1f)
                     .fillMaxWidth(),
-            ) {
-                PixelStarfield()
-
-                Box(
-                    modifier = Modifier
-                        .align(Alignment.BottomEnd)
-                        .padding(end = 56.dp, bottom = 48.dp),
-                ) {
-                    PixelCrescentMoon()
-                }
-
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier
-                        .fillMaxSize()
-                        .padding(horizontal = 16.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp, Alignment.Bottom),
-                    contentPadding = PaddingValues(top = 16.dp, bottom = 16.dp),
-                ) {
-                    itemsIndexed(messages, key = { _, msg -> msg.id }) { idx, msg ->
-                        val isSearchMatch = inChatSearchQuery.isNotBlank() &&
-                            !msg.isDeleted && msg.text.contains(inChatSearchQuery.trim(), ignoreCase = true)
-                        val isSelected = msg.id in selectedMessageIds
-
-                        val toggleSelect = {
-                            selectedMessageIds = if (msg.id in selectedMessageIds) {
-                                selectedMessageIds - msg.id
-                            } else {
-                                selectedMessageIds + msg.id
-                            }
-                        }
-                        val onTapBubbleAction = {
-                            if (selectedMessageIds.isNotEmpty()) {
-                                toggleSelect()
-                            } else if (!msg.isDeleted) {
-                                tappedReceiptMsgId = if (tappedReceiptMsgId == msg.id) null else msg.id
-                            }
-                        }
-
-                        val isJumpHighlighted = highlightedMessageId == msg.id
-                        val rowHighlightColor by animateColorAsState(
-                            targetValue = when {
-                                isSelected -> MyBubbleFill.copy(alpha = 0.22f)
-                                isJumpHighlighted -> LanternAmber.copy(alpha = 0.24f)
-                                else -> Color.Transparent
-                            },
-                            animationSpec = tween(durationMillis = 300),
-                            label = "msg_row_highlight",
-                        )
-
-                        val showSingleToolbar = selectedMessages.size == 1 &&
-                            selectedMessages.first().id == msg.id &&
-                            !msg.isDeleted &&
-                            msg.type != MessageType.BURNED_TRACE &&
-                            msg.attachmentType != AttachmentType.CALL
-                        val placeToolbarAbove = idx >= (messages.size - 2).coerceAtLeast(0)
-
-                        @Composable
-                        fun RenderSingleToolbar() {
-                            val canSaveMedia = msg.type != MessageType.VIEW_ONCE &&
-                                msg.attachmentType != null &&
-                                msg.attachmentType != AttachmentType.CALL &&
-                                !msg.attachmentLocalPath.isNullOrBlank() &&
-                                File(msg.attachmentLocalPath).exists()
-                            val canFavSticker = msg.type != MessageType.VIEW_ONCE &&
-                                msg.attachmentType == AttachmentType.STICKER &&
-                                !msg.attachmentLocalPath.isNullOrBlank() &&
-                                File(msg.attachmentLocalPath).exists()
-                            SelectedMessageToolbar(
-                                message = msg,
-                                currentUsername = state.currentUsername,
-                                customReactionEmojis = state.customReactionEmojis,
-                                onReact = { emoji ->
-                                    state.reactToMessage(activeChatId, msg.id, emoji)
-                                    selectedMessageIds = emptySet()
-                                },
-                                onOpenEditReactions = { showEditReactionsDialog = true },
-                                onReply = {
-                                    replyingToMessage = msg
-                                    selectedMessageIds = emptySet()
-                                },
-                                onCopy = if (msg.text.isNotBlank()) {
-                                    {
-                                        clipboardManager.setText(AnnotatedString(msg.text))
-                                        selectedMessageIds = emptySet()
-                                        actionNotice = "copied"
-                                    }
-                                } else null,
-                                onEdit = if (msg.isMine && msg.type == MessageType.REGULAR && msg.attachmentType == null) {
-                                    {
-                                        editingMessage = msg
-                                        draft = msg.text
-                                        replyingToMessage = null
-                                        selectedMessageIds = emptySet()
-                                    }
-                                } else null,
-                                onPin = {
-                                    if (msg.isPinned) {
-                                        unpinConfirmMessage = msg
-                                    } else {
-                                        state.togglePinMessage(activeChatId, msg.id)
-                                    }
-                                    selectedMessageIds = emptySet()
-                                },
-                                onInfo = {
-                                    infoModalMessage = msg
-                                    selectedMessageIds = emptySet()
-                                },
-                                onStar = {
-                                    state.toggleStarMessage(activeChatId, msg.id)
-                                    selectedMessageIds = emptySet()
-                                },
-                                onFavoriteSticker = if (canFavSticker) {
-                                    {
-                                        coroutineScope.launch {
-                                            state.favoriteStickerFromMessage(msg)
-                                                .onSuccess { actionNotice = "added to my stickers" }
-                                                .onFailure { attachmentError = it.localizedMessage ?: "failed to save sticker" }
-                                        }
-                                        selectedMessageIds = emptySet()
-                                    }
-                                } else null,
-                                onSaveMedia = if (canSaveMedia) {
-                                    {
-                                        msg.attachmentLocalPath?.let { path ->
-                                            saveMediaFromChat(
-                                                localPath = path,
-                                                attachmentType = msg.attachmentType,
-                                                mimeType = msg.attachmentMimeType,
-                                                fileName = msg.attachmentName,
-                                            )
-                                        }
-                                        selectedMessageIds = emptySet()
-                                    }
-                                } else null,
-                                onDelete = {
-                                    deleteTargetMessages = listOf(msg)
-                                    selectedMessageIds = emptySet()
-                                },
-                            )
-                        }
-
-                        Column(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .background(rowHighlightColor)
-                                .then(
-                                    if (selectedMessageIds.isNotEmpty()) {
-                                        Modifier.clickable { toggleSelect() }
-                                    } else {
-                                        Modifier
-                                    }
-                                ),
-                            horizontalAlignment = if (msg.isMine) Alignment.End else Alignment.Start,
-                        ) {
-                            if (showSingleToolbar && placeToolbarAbove) {
-                                RenderSingleToolbar()
-                                Spacer(modifier = Modifier.height(6.dp))
-                            }
-
-                            SwipeToReplyContainer(
-                                enabled = !msg.isDeleted && selectedMessageIds.isEmpty(),
-                                onSwipedToReply = { replyingToMessage = msg },
-                            ) {
-                                when (msg.type) {
-                                    MessageType.DISAPPEARING -> {
-                                        DisappearingMessageBubble(
-                                            message = msg,
-                                            litEmbers = msg.embersRemaining,
-                                            fontScale = state.messageFontScale,
-                                            isGroup = isGroup,
-                                            isReceiptExpanded = tappedReceiptMsgId == msg.id,
-                                            highlightQuery = if (isSearchMatch) inChatSearchQuery.trim() else "",
-                                            isJumpHighlighted = isJumpHighlighted,
-                                            onTapBubble = onTapBubbleAction,
-                                            onLongPress = toggleSelect,
-                                            onToggleEmojiReaction = { emoji -> state.reactToMessage(activeChatId, msg.id, emoji) },
-                                            onOpenPhoto = { path ->
-                                                if (selectedMessageIds.isNotEmpty()) toggleSelect() else fullScreenPhotoPath = path
-                                            },
-                                            onOpenVideo = { path ->
-                                                if (selectedMessageIds.isNotEmpty()) toggleSelect() else fullScreenVideoPath = path
-                                            },
-                                            onOpenFile = { path, mime ->
-                                                if (selectedMessageIds.isNotEmpty()) toggleSelect() else openLocalFile(path, mime)
-                                            },
-                                            onJumpToReply = { replyId ->
-                                                if (selectedMessageIds.isNotEmpty()) toggleSelect() else jumpToMessage(replyId)
-                                            },
-                                            onVoicePlayStarted = { startedMsg ->
-                                                state.markVoiceNoteListened(activeChatId, startedMsg)
-                                            },
-                                            voicePlayer = state.voicePlayer,
-                                        )
-                                    }
-                                    MessageType.VIEW_ONCE -> {
-                                        ViewOnceCard(
-                                            message = msg,
-                                            isReceiptExpanded = tappedReceiptMsgId == msg.id,
-                                            isJumpHighlighted = isJumpHighlighted,
-                                            onTapCard = {
-                                                if (selectedMessageIds.isNotEmpty()) {
-                                                    toggleSelect()
-                                                } else if (!msg.isMine && msg.viewOnceStatus == ViewOnceStatus.UNOPENED) {
-                                                    viewingViewOnceMessage = msg
-                                                } else {
-                                                    onTapBubbleAction()
-                                                }
-                                            },
-                                            onLongPress = toggleSelect,
-                                        )
-                                    }
-                                    MessageType.BURNED_TRACE -> {
-                                        BurnedTraceBubble(
-                                            message = msg,
-                                            fontScale = state.messageFontScale,
-                                            inSelectionMode = selectedMessageIds.isNotEmpty(),
-                                            onToggleSelect = toggleSelect,
-                                        )
-                                    }
-                                    MessageType.REGULAR -> {
-                                        StandardMessageBubble(
-                                            message = msg,
-                                            fontScale = state.messageFontScale,
-                                            isGroup = isGroup,
-                                            isReceiptExpanded = tappedReceiptMsgId == msg.id,
-                                            highlightQuery = if (isSearchMatch) inChatSearchQuery.trim() else "",
-                                            isJumpHighlighted = isJumpHighlighted,
-                                            onTapBubble = onTapBubbleAction,
-                                            onLongPress = toggleSelect,
-                                            onToggleEmojiReaction = { emoji -> state.reactToMessage(activeChatId, msg.id, emoji) },
-                                            onOpenPhoto = { path ->
-                                                if (selectedMessageIds.isNotEmpty()) toggleSelect() else fullScreenPhotoPath = path
-                                            },
-                                            onOpenVideo = { path ->
-                                                if (selectedMessageIds.isNotEmpty()) toggleSelect() else fullScreenVideoPath = path
-                                            },
-                                            onOpenFile = { path, mime ->
-                                                if (selectedMessageIds.isNotEmpty()) toggleSelect() else openLocalFile(path, mime)
-                                            },
-                                            onJumpToReply = { replyId ->
-                                                if (selectedMessageIds.isNotEmpty()) toggleSelect() else jumpToMessage(replyId)
-                                            },
-                                            onVoicePlayStarted = { startedMsg ->
-                                                state.markVoiceNoteListened(activeChatId, startedMsg)
-                                            },
-                                            onFavoriteSticker = { stickerMsg ->
-                                                coroutineScope.launch {
-                                                    state.favoriteStickerFromMessage(stickerMsg)
-                                                        .onSuccess { actionNotice = "added to my stickers" }
-                                                        .onFailure { attachmentError = it.localizedMessage ?: "failed to save sticker" }
-                                                }
-                                            },
-                                            onCallBack = { if (selectedMessageIds.isNotEmpty()) toggleSelect() else launchCallFromChat() },
-                                            voicePlayer = state.voicePlayer,
-                                        )
-                                    }
-                                }
-                            }
-
-                            // When exactly 1 message is selected, render reaction line and actions next to the message.
-                            // For the last two messages, it renders above the bubble instead so it never hides under the input bar.
-                            if (showSingleToolbar && !placeToolbarAbove) {
-                                Spacer(modifier = Modifier.height(6.dp))
-                                RenderSingleToolbar()
-                            }
-                        }
+                listState = listState,
+                messages = messages,
+                inChatSearchQuery = inChatSearchQuery,
+                selectedMessageIds = selectedMessageIds,
+                selectedMessagesCount = selectedMessages.size,
+                singleSelectedMessageId = selectedMessages.singleOrNull()?.id,
+                highlightedMessageId = highlightedMessageId,
+                tappedReceiptMsgId = tappedReceiptMsgId,
+                fontScale = state.messageFontScale,
+                isGroup = isGroup,
+                isContactTyping = state.isContactTyping,
+                currentUsername = state.currentUsername,
+                customReactionEmojis = state.customReactionEmojis,
+                voicePlayer = state.voicePlayer,
+                onToggleSelect = { id ->
+                    selectedMessageIds = if (id in selectedMessageIds) {
+                        selectedMessageIds - id
+                    } else {
+                        selectedMessageIds + id
                     }
-
-                    if (state.isContactTyping) {
-                        item { TypingIndicatorRow() }
+                },
+                onToggleReceipt = { id ->
+                    tappedReceiptMsgId = if (tappedReceiptMsgId == id) null else id
+                },
+                onSwipeToReply = { msg -> replyingToMessage = msg },
+                onToggleEmojiReaction = { msg, emoji -> state.reactToMessage(activeChatId, msg.id, emoji) },
+                onOpenPhoto = { path -> fullScreenPhotoPath = path },
+                onOpenVideo = { path -> fullScreenVideoPath = path },
+                onOpenFile = { path, mime -> openLocalFile(path, mime) },
+                onJumpToReply = { replyId -> jumpToMessage(replyId) },
+                onVoicePlayStarted = { startedMsg -> state.markVoiceNoteListened(activeChatId, startedMsg) },
+                onViewOnceTap = { msg ->
+                    if (selectedMessageIds.isNotEmpty()) {
+                        selectedMessageIds = if (msg.id in selectedMessageIds) {
+                            selectedMessageIds - msg.id
+                        } else {
+                            selectedMessageIds + msg.id
+                        }
+                    } else if (!msg.isMine && msg.viewOnceStatus == ViewOnceStatus.UNOPENED) {
+                        viewingViewOnceMessage = msg
+                    } else if (!msg.isDeleted) {
+                        tappedReceiptMsgId = if (tappedReceiptMsgId == msg.id) null else msg.id
                     }
-                }
-            }
-
-            // Attachment Error Banner
-            if (attachmentError != null) {
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(TheirBubbleFill)
-                        .border(1.dp, WaxSealRed)
-                        .padding(horizontal = 16.dp, vertical = 6.dp),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = attachmentError ?: "",
-                            fontFamily = PixelifySans,
-                            fontSize = 11.sp,
-                            color = WaxSealRed,
-                            modifier = Modifier.weight(1f),
-                        )
-                        Text(
-                            text = "✕",
-                            fontFamily = PixelifySans,
-                            fontSize = 12.sp,
-                            color = MutedText,
-                            modifier = Modifier.clickable { attachmentError = null }.padding(start = 8.dp),
+                },
+                onFavoriteSticker = { stickerMsg ->
+                    coroutineScope.launch {
+                        state.favoriteStickerFromMessage(stickerMsg)
+                            .onSuccess { actionNotice = "added to my stickers" }
+                            .onFailure { attachmentError = it.localizedMessage ?: "failed to save sticker" }
+                    }
+                },
+                onCallBack = { launchCallFromChat() },
+                onToolbarReact = { msg, emoji ->
+                    state.reactToMessage(activeChatId, msg.id, emoji)
+                    selectedMessageIds = emptySet()
+                },
+                onOpenEditReactions = { showEditReactionsDialog = true },
+                onToolbarReply = { msg ->
+                    replyingToMessage = msg
+                    selectedMessageIds = emptySet()
+                },
+                onToolbarCopy = { msg ->
+                    clipboardManager.setText(AnnotatedString(msg.text))
+                    selectedMessageIds = emptySet()
+                    actionNotice = "copied"
+                },
+                onToolbarEdit = { msg ->
+                    editingMessage = msg
+                    draft = msg.text
+                    replyingToMessage = null
+                    selectedMessageIds = emptySet()
+                },
+                onToolbarPin = { msg ->
+                    if (msg.isPinned) {
+                        unpinConfirmMessage = msg
+                    } else {
+                        state.togglePinMessage(activeChatId, msg.id)
+                    }
+                    selectedMessageIds = emptySet()
+                },
+                onToolbarInfo = { msg ->
+                    infoModalMessage = msg
+                    selectedMessageIds = emptySet()
+                },
+                onToolbarStar = { msg ->
+                    state.toggleStarMessage(activeChatId, msg.id)
+                    selectedMessageIds = emptySet()
+                },
+                onToolbarFavoriteSticker = { msg ->
+                    coroutineScope.launch {
+                        state.favoriteStickerFromMessage(msg)
+                            .onSuccess { actionNotice = "added to my stickers" }
+                            .onFailure { attachmentError = it.localizedMessage ?: "failed to save sticker" }
+                    }
+                    selectedMessageIds = emptySet()
+                },
+                onToolbarSaveMedia = { msg ->
+                    msg.attachmentLocalPath?.let { path ->
+                        saveMediaFromChat(
+                            localPath = path,
+                            attachmentType = msg.attachmentType,
+                            mimeType = msg.attachmentMimeType,
+                            fileName = msg.attachmentName,
                         )
                     }
-                }
-            }
+                    selectedMessageIds = emptySet()
+                },
+                onToolbarDelete = { msg ->
+                    deleteTargetMessages = listOf(msg)
+                    selectedMessageIds = emptySet()
+                },
+            )
+
+            ChatAttachmentErrorBanner(
+                attachmentError = attachmentError,
+                onDismiss = { attachmentError = null },
+            )
 
             if (isPreparingAttachment) {
                 Box(
@@ -1416,40 +789,14 @@ fun ChatScreen(
                 }
             }
 
-            // @Mention Autocomplete Strip (Groups)
-            if (mentionCandidates.isNotEmpty()) {
-                LazyRow(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MothHeaderBg)
-                        .border(1.dp, MothDivider)
-                        .padding(horizontal = 12.dp, vertical = 6.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    items(mentionCandidates) { member ->
-                        SteppedBox(
-                            modifier = Modifier.clickable {
-                                val prefixBeforeAt = draft.substringBeforeLast("@")
-                                draft = "$prefixBeforeAt@$member "
-                            },
-                            backgroundColor = MothBgDark,
-                            borderColor = LanternAmber,
-                            cutSize = 2.dp,
-                            borderWidth = 1.dp,
-                        ) {
-                            Text(
-                                text = "@$member",
-                                fontFamily = PixelifySans,
-                                fontSize = 12.sp,
-                                color = LanternAmber,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                            )
-                        }
-                    }
-                }
-            }
+            ChatMentionStrip(
+                mentionCandidates = mentionCandidates,
+                onPickMember = { member ->
+                    val prefixBeforeAt = draft.substringBeforeLast("@")
+                    draft = "$prefixBeforeAt@$member "
+                },
+            )
 
-            // Edit or Reply Banner above Input
             if (editingMessage != null) {
                 val target = editingMessage!!
                 InputModeBanner(
@@ -1470,584 +817,131 @@ fun ChatScreen(
                 )
             }
 
-            // Pending Attachment Preview Strip with WhatsApp-style View-Once Toggle
             pendingAttachment?.let { att ->
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MothHeaderBg)
-                        .border(1.dp, MothDivider)
-                        .padding(horizontal = 14.dp, vertical = 8.dp),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.spacedBy(10.dp),
-                    ) {
-                        if (att.type == AttachmentType.PHOTO) {
-                            AsyncImage(
-                                model = File(att.localPath),
-                                contentDescription = att.name,
-                                contentScale = ContentScale.Crop,
-                                modifier = Modifier
-                                    .size(44.dp)
-                                    .clip(SteppedCornerShape(3.dp))
-                                    .border(1.dp, LanternAmber, SteppedCornerShape(3.dp)),
-                            )
-                        } else if (att.type == AttachmentType.VIDEO) {
-                            SteppedBox(
-                                modifier = Modifier.size(44.dp),
-                                backgroundColor = MothBgDark,
-                                borderColor = LanternAmber,
-                                cutSize = 3.dp,
-                                borderWidth = 1.dp,
-                            ) {
-                                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                    PixelVideoIcon(tint = LanternAmber, modifier = Modifier.size(20.dp))
-                                }
-                            }
-                        } else {
-                            SteppedBox(
-                                modifier = Modifier.size(44.dp),
-                                backgroundColor = MothBgDark,
-                                borderColor = LanternAmber,
-                                cutSize = 3.dp,
-                                borderWidth = 1.dp,
-                            ) {
-                                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                    Text(
-                                        text = if (att.type == AttachmentType.VOICE) "MIC" else att.name.substringAfterLast('.', "FILE").take(4).uppercase(),
-                                        fontFamily = PixelifySans,
-                                        fontSize = 10.sp,
-                                        fontWeight = FontWeight.Bold,
-                                        color = LanternAmber,
-                                    )
-                                }
-                            }
-                        }
-
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(
-                                text = att.name,
-                                fontFamily = PixelifySans,
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = TheirBubbleText,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis,
-                            )
-                            Text(
-                                text = if (pendingViewOnce) "${formatFileSize(att.sizeBytes)} • view once" else formatFileSize(att.sizeBytes),
-                                fontFamily = PixelifySans,
-                                fontSize = 11.sp,
-                                color = if (pendingViewOnce) LanternAmber else MutedText,
-                            )
-                        }
-
-                        // WhatsApp-style View-Once toggle on selected attachment
-                        SteppedBox(
-                            modifier = Modifier
-                                .size(34.dp)
-                                .clickable { pendingViewOnce = !pendingViewOnce }
-                                .testTag("pending_view_once_toggle"),
-                            backgroundColor = if (pendingViewOnce) MyBubbleFill else MothBgDark,
-                            borderColor = if (pendingViewOnce) LanternAmber else TheirBubbleBorder,
-                            cutSize = 3.dp,
-                            borderWidth = 1.dp,
-                        ) {
-                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                PixelViewOnceIcon(
-                                    tint = if (pendingViewOnce) MyBubbleText else MutedText,
-                                    active = pendingViewOnce,
-                                    modifier = Modifier.size(18.dp),
-                                )
-                            }
-                        }
-
-                        SteppedBox(
-                            modifier = Modifier
-                                .clickable {
-                                    pendingAttachment = null
-                                    pendingViewOnce = false
-                                }
-                                .testTag("clear_attachment_button"),
-                            backgroundColor = MothBgDark,
-                            borderColor = WaxSealRed,
-                            cutSize = 3.dp,
-                            borderWidth = 1.dp,
-                        ) {
-                            Text(
-                                text = "✕",
-                                fontFamily = PixelifySans,
-                                fontSize = 12.sp,
-                                color = WaxSealRed,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
-                            )
-                        }
-                    }
-                }
+                ChatPendingAttachmentBanner(
+                    att = att,
+                    pendingViewOnce = pendingViewOnce,
+                    onToggleViewOnce = { pendingViewOnce = !pendingViewOnce },
+                    onClearAttachment = {
+                        pendingAttachment = null
+                        pendingViewOnce = false
+                    },
+                )
             }
 
-            // Custom Stickers Tray
-            AnimatedVisibility(visible = showStickerTray) {
-                Column(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MothHeaderBg)
-                        .border(1.dp, MothDivider)
-                        .padding(horizontal = 12.dp, vertical = 10.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically,
-                    ) {
-                        Text(
-                            text = "my stickers",
-                            fontFamily = PixelifySans,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 12.sp,
-                            color = LanternAmber,
-                        )
-                        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                            SteppedButton(
-                                text = "+ draw",
-                                onClick = { showPixelStickerMaker = true },
-                                backgroundColor = TheirBubbleFill,
-                                borderColor = LanternAmber,
-                                textColor = LanternAmber,
-                                cutSize = 3.dp,
-                                borderWidth = 1.dp,
-                                modifier = Modifier.testTag("draw_sticker_button"),
-                            )
-                            SteppedButton(
-                                text = "+ photo",
-                                onClick = {
-                                    stickerPhotoLauncher.launch(
-                                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
-                                    )
-                                },
-                                backgroundColor = TheirBubbleFill,
-                                borderColor = TheirBubbleBorder,
-                                textColor = TheirBubbleText,
-                                cutSize = 3.dp,
-                                borderWidth = 1.dp,
-                                modifier = Modifier.testTag("add_photo_sticker_button"),
-                            )
-                        }
-                    }
+            ChatStickersTray(
+                visible = showStickerTray,
+                stickers = state.customStickers,
+                onOpenDraw = { showPixelStickerMaker = true },
+                onOpenPhotoPicker = {
+                    stickerPhotoLauncher.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageOnly)
+                    )
+                },
+                onSendSticker = { sticker ->
+                    state.sendSticker(chatId = activeChatId, sticker = sticker, asViewOnce = false)
+                    showStickerTray = false
+                },
+                onHoldSticker = { sticker -> holdStickerTarget = sticker },
+            )
 
-                    if (state.customStickers.isEmpty()) {
-                        Box(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 12.dp),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                text = "no stickers yet — tap + draw or + photo to create one",
-                                fontFamily = PixelifySans,
-                                fontSize = 11.sp,
-                                color = MutedText,
-                            )
+            ChatAttachMenuRow(
+                visible = showAttachMenu,
+                onCameraClick = {
+                    val granted = ContextCompat.checkSelfPermission(
+                        context, Manifest.permission.CAMERA
+                    ) == PackageManager.PERMISSION_GRANTED
+                    if (granted) {
+                        val outUri = state.createTempCameraPhotoUri()
+                        pendingCameraUri = outUri
+                        cameraCaptureLauncher.launch(outUri)
+                    } else {
+                        cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                    }
+                },
+                onMediaClick = {
+                    photoPickerLauncher.launch(
+                        PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
+                    )
+                },
+                onFileClick = { filePickerLauncher.launch(arrayOf("*/*")) },
+            )
+
+            ChatVoiceFilterPickerBar(
+                visible = showVoiceFilterMenu,
+                activeFilter = state.voiceRecorder.selectedFilter,
+                onSelectFilter = { filter ->
+                    state.voiceRecorder.selectedFilter = filter
+                    showVoiceFilterMenu = false
+                },
+            )
+
+            Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MothDivider))
+
+            ChatInputBar(
+                voiceRecorder = state.voiceRecorder,
+                draft = draft,
+                hasPendingAttachment = pendingAttachment != null,
+                pendingViewOnce = pendingViewOnce,
+                showAttachMenu = showAttachMenu,
+                showStickerTray = showStickerTray,
+                showVoiceFilterMenu = showVoiceFilterMenu,
+                onDraftChange = { draft = it },
+                onToggleAttachMenu = {
+                    showAttachMenu = !showAttachMenu
+                    if (showAttachMenu) showStickerTray = false
+                },
+                onToggleStickerTray = {
+                    showStickerTray = !showStickerTray
+                    if (showStickerTray) {
+                        showAttachMenu = false
+                        showVoiceFilterMenu = false
+                    }
+                },
+                onVoiceNoteClick = {
+                    showStickerTray = false
+                    showAttachMenu = false
+                    showVoiceFilterMenu = false
+                    val granted = ContextCompat.checkSelfPermission(
+                        context, Manifest.permission.RECORD_AUDIO
+                    ) == PackageManager.PERMISSION_GRANTED
+                    if (granted) {
+                        if (!state.voiceRecorder.startRecording()) {
+                            attachmentError = "unable to start microphone"
                         }
                     } else {
-                        LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                            items(state.customStickers, key = { it.id }) { sticker ->
-                                StickerTrayItem(
-                                    sticker = sticker,
-                                    onSend = {
-                                        state.sendSticker(
-                                            chatId = activeChatId,
-                                            sticker = sticker,
-                                            asViewOnce = false,
-                                        )
-                                        showStickerTray = false
-                                    },
-                                    onHold = { holdStickerTarget = sticker },
+                        micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                    }
+                },
+                onVoiceNoteLongClick = {
+                    showStickerTray = false
+                    showAttachMenu = false
+                    showVoiceFilterMenu = !showVoiceFilterMenu
+                },
+                onSendTextClick = { handleSend() },
+                onSendVoiceNoteClick = {
+                    coroutineScope.launch {
+                        val result = state.voiceRecorder.stopRecordingAndProcess()
+                        if (result != null) {
+                            val (file, dur) = result
+                            val attRes = state.prepareVoiceAttachment(file, dur)
+                            attRes.onSuccess { att ->
+                                state.sendMessage(
+                                    chatId = activeChatId,
+                                    text = "",
+                                    attachment = att,
+                                    replyTo = replyingToMessage,
                                 )
+                                replyingToMessage = null
+                            }.onFailure { err ->
+                                attachmentError = err.localizedMessage ?: "voice note failed"
                             }
-                        }
-                        Text(
-                            text = "tap to send • hold to unfavourite / delete",
-                            fontFamily = PixelifySans,
-                            fontSize = 10.sp,
-                            color = PlaceholderText,
-                        )
-                    }
-                }
-            }
-
-            // + (More) Menu: Camera, Photo/Video Media, File
-            AnimatedVisibility(visible = showAttachMenu) {
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MothHeaderBg)
-                        .border(1.dp, MothDivider)
-                        .padding(horizontal = 10.dp, vertical = 8.dp),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    SteppedButton(
-                        text = "cam",
-                        onClick = {
-                            val granted = ContextCompat.checkSelfPermission(
-                                context, Manifest.permission.CAMERA
-                            ) == PackageManager.PERMISSION_GRANTED
-                            if (granted) {
-                                val outUri = state.createTempCameraPhotoUri()
-                                pendingCameraUri = outUri
-                                cameraCaptureLauncher.launch(outUri)
-                            } else {
-                                cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                            }
-                        },
-                        modifier = Modifier.weight(1f).testTag("camera_capture_button"),
-                        backgroundColor = TheirBubbleFill,
-                        borderColor = TheirBubbleBorder,
-                        textColor = TheirBubbleText,
-                        cutSize = 3.dp,
-                        leadingIcon = { PixelCameraIcon(tint = TheirBubbleText) },
-                    )
-                    SteppedButton(
-                        text = "media",
-                        onClick = {
-                            photoPickerLauncher.launch(
-                                PickVisualMediaRequest(ActivityResultContracts.PickVisualMedia.ImageAndVideo)
-                            )
-                        },
-                        modifier = Modifier.weight(1f).testTag("pick_photo_button"),
-                        backgroundColor = TheirBubbleFill,
-                        borderColor = TheirBubbleBorder,
-                        textColor = TheirBubbleText,
-                        cutSize = 3.dp,
-                        leadingIcon = { PixelPhotoIcon(tint = TheirBubbleText) },
-                    )
-                    SteppedButton(
-                        text = "file",
-                        onClick = { filePickerLauncher.launch(arrayOf("*/*")) },
-                        modifier = Modifier.weight(1f).testTag("pick_file_button"),
-                        backgroundColor = TheirBubbleFill,
-                        borderColor = TheirBubbleBorder,
-                        textColor = TheirBubbleText,
-                        cutSize = 3.dp,
-                        leadingIcon = { PixelFileIcon(tint = TheirBubbleText) },
-                    )
-                }
-            }
-
-            // Voice Filter Picker (hold voicenote button to open)
-            AnimatedVisibility(visible = showVoiceFilterMenu) {
-                val activeFilter = state.voiceRecorder.selectedFilter
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(MothHeaderBg)
-                        .border(1.dp, LanternAmber)
-                        .horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 10.dp, vertical = 8.dp)
-                        .testTag("voice_filter_picker_bar"),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    Text(
-                        text = "voice filter:",
-                        fontFamily = PixelifySans,
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 11.sp,
-                        color = Color(0xFFFFD152),
-                    )
-                    VoiceFilter.entries.forEach { filter ->
-                        val isChosen = activeFilter == filter
-                        SteppedButton(
-                            text = filter.label,
-                            onClick = {
-                                state.voiceRecorder.selectedFilter = filter
-                                showVoiceFilterMenu = false
-                            },
-                            backgroundColor = if (isChosen) Color(0xFFFFD152) else TheirBubbleFill,
-                            borderColor = if (isChosen) Color(0xFFFFD152) else TheirBubbleBorder,
-                            textColor = if (isChosen) MothBgDark else TheirBubbleText,
-                            cutSize = 2.dp,
-                            borderWidth = 1.dp,
-                            modifier = Modifier.testTag("voice_filter_${filter.id}"),
-                        )
-                    }
-                }
-            }
-
-            // 3. Bottom Input Bar (with Voice Note Recording mode & Sticker button)
-            Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MothDivider))
-            Box(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .background(MothHeaderBg)
-                    .windowInsetsPadding(
-                        WindowInsets.navigationBars.union(WindowInsets.ime).only(WindowInsetsSides.Bottom)
-                    )
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-            ) {
-                if (state.voiceRecorder.isRecording) {
-                    val isRecPaused = state.voiceRecorder.isPaused
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(44.dp)
-                            .background(MothBgDark, SteppedCornerShape(4.dp))
-                            .border(2.dp, if (isRecPaused) LanternAmber else WaxSealRed, SteppedCornerShape(4.dp))
-                            .padding(horizontal = 12.dp),
-                        verticalAlignment = Alignment.CenterVertically,
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Box(modifier = Modifier.size(8.dp).background(if (isRecPaused) LanternAmber else WaxSealRed))
-                            val sec = state.voiceRecorder.elapsedSec
-                            val activeFilter = state.voiceRecorder.selectedFilter
-                            Text(
-                                text = "${if (isRecPaused) "paused" else "recording"} ${sec / 60}:${"%02d".format(sec % 60)}${if (activeFilter != VoiceFilter.NONE) " • ${activeFilter.label}" else ""}",
-                                fontFamily = PixelifySans,
-                                fontSize = 13.sp,
-                                color = if (activeFilter != VoiceFilter.NONE) Color(0xFFFFD152) else LanternAmber,
-                            )
-                        }
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            SteppedBox(
-                                modifier = Modifier
-                                    .size(32.dp)
-                                    .clickable {
-                                        if (isRecPaused) {
-                                            state.voiceRecorder.resumeRecording()
-                                        } else {
-                                            state.voiceRecorder.pauseRecording()
-                                        }
-                                    }
-                                    .testTag("pause_resume_voice_button"),
-                                backgroundColor = TheirBubbleFill,
-                                borderColor = LanternAmber,
-                                cutSize = 2.dp,
-                                borderWidth = 1.dp,
-                            ) {
-                                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                    if (isRecPaused) {
-                                        PixelPlayIcon(tint = LanternAmber, modifier = Modifier.size(14.dp))
-                                    } else {
-                                        PixelPauseIcon(tint = LanternAmber, modifier = Modifier.size(14.dp))
-                                    }
-                                }
-                            }
-                            SteppedButton(
-                                text = "✕",
-                                onClick = { state.voiceRecorder.cancelRecording() },
-                                backgroundColor = TheirBubbleFill,
-                                borderColor = WaxSealRed,
-                                textColor = WaxSealRed,
-                                cutSize = 2.dp,
-                            )
-                            SteppedButton(
-                                text = "✓ send",
-                                onClick = {
-                                    coroutineScope.launch {
-                                        val result = state.voiceRecorder.stopRecordingAndProcess()
-                                        if (result != null) {
-                                            val (file, dur) = result
-                                            val attRes = state.prepareVoiceAttachment(file, dur)
-                                            attRes.onSuccess { att ->
-                                                state.sendMessage(
-                                                    chatId = activeChatId,
-                                                    text = "",
-                                                    attachment = att,
-                                                    replyTo = replyingToMessage,
-                                                )
-                                                replyingToMessage = null
-                                            }.onFailure { err ->
-                                                attachmentError = err.localizedMessage ?: "voice note failed"
-                                            }
-                                        }
-                                    }
-                                },
-                                backgroundColor = MyBubbleFill,
-                                borderColor = MyBubbleBorder,
-                                textColor = MyBubbleText,
-                                cutSize = 2.dp,
-                                modifier = Modifier.testTag("send_voice_note_button"),
-                            )
                         }
                     }
-                } else {
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        verticalAlignment = Alignment.Bottom,
-                        horizontalArrangement = Arrangement.spacedBy(8.dp),
-                    ) {
-                        // + (More) toggle button
-                        SteppedBox(
-                            modifier = Modifier
-                                .size(44.dp)
-                                .clickable {
-                                    showAttachMenu = !showAttachMenu
-                                    if (showAttachMenu) showStickerTray = false
-                                }
-                                .testTag("attach_button"),
-                            backgroundColor = MothBgDark,
-                            borderColor = if (showAttachMenu || pendingAttachment != null || pendingViewOnce) LanternAmber else TheirBubbleBorder,
-                            cutSize = 4.dp,
-                            borderWidth = 2.dp,
-                        ) {
-                            Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                Text(
-                                    text = if (showAttachMenu) "✕" else "+",
-                                    fontFamily = PixelifySans,
-                                    fontSize = 18.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    color = if (showAttachMenu || pendingAttachment != null || pendingViewOnce) LanternAmber else TheirBubbleText,
-                                )
-                            }
-                        }
-
-                        // Text field + Sticker button + Voice Note button
-                        SteppedBox(
-                            modifier = Modifier
-                                .weight(1f)
-                                .heightIn(min = 44.dp, max = 132.dp),
-                            backgroundColor = MothBgDark,
-                            borderColor = TheirBubbleBorder,
-                            cutSize = 4.dp,
-                            borderWidth = 2.dp,
-                        ) {
-                            Row(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .padding(horizontal = 10.dp, vertical = 8.dp),
-                                verticalAlignment = if (draft.contains('\n')) Alignment.Bottom else Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp),
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .weight(1f)
-                                        .heightIn(min = 28.dp, max = 112.dp)
-                                        .verticalScroll(rememberScrollState()),
-                                    contentAlignment = Alignment.CenterStart,
-                                ) {
-                                    BasicTextField(
-                                        value = draft,
-                                        onValueChange = { draft = it },
-                                        textStyle = TextStyle(
-                                            fontFamily = PixelifySans,
-                                            fontSize = 14.sp,
-                                            color = TheirBubbleText,
-                                            lineHeight = 19.sp,
-                                        ),
-                                        cursorBrush = SolidColor(LanternAmber),
-                                        singleLine = false,
-                                        maxLines = 5,
-                                        keyboardOptions = KeyboardOptions(
-                                            capitalization = KeyboardCapitalization.Sentences,
-                                            imeAction = ImeAction.Default,
-                                        ),
-                                        decorationBox = { innerTextField ->
-                                            Box(
-                                                modifier = Modifier.fillMaxWidth(),
-                                                contentAlignment = Alignment.CenterStart,
-                                            ) {
-                                                if (draft.isEmpty()) {
-                                                    Text(
-                                                        text = if (pendingAttachment != null) "add caption..." else "say something",
-                                                        fontFamily = PixelifySans,
-                                                        fontSize = 14.sp,
-                                                        lineHeight = 19.sp,
-                                                        color = PlaceholderText,
-                                                    )
-                                                }
-                                                innerTextField()
-                                            }
-                                        },
-                                        modifier = Modifier
-                                            .fillMaxWidth()
-                                            .testTag("message_input_field"),
-                                    )
-                                }
-
-                                // Sticker Picker Button
-                                Box(
-                                    modifier = Modifier
-                                        .size(26.dp)
-                                        .clickable {
-                                            showStickerTray = !showStickerTray
-                                            if (showStickerTray) {
-                                                showAttachMenu = false
-                                                showVoiceFilterMenu = false
-                                            }
-                                        }
-                                        .testTag("sticker_picker_button"),
-                                    contentAlignment = Alignment.Center,
-                                ) {
-                                    PixelStickerIcon(tint = if (showStickerTray) LanternAmber else MutedText)
-                                }
-
-                                // Voice Note Button beside Stickers (tap to record, hold to pick voice filter)
-                                val hasActiveVoiceFilter = state.voiceRecorder.selectedFilter != VoiceFilter.NONE
-                                SteppedBox(
-                                    modifier = Modifier
-                                        .size(28.dp)
-                                        .combinedClickable(
-                                            onClick = {
-                                                showStickerTray = false
-                                                showAttachMenu = false
-                                                showVoiceFilterMenu = false
-                                                val granted = ContextCompat.checkSelfPermission(
-                                                    context, Manifest.permission.RECORD_AUDIO
-                                                ) == PackageManager.PERMISSION_GRANTED
-                                                if (granted) {
-                                                    if (!state.voiceRecorder.startRecording()) {
-                                                        attachmentError = "unable to start microphone"
-                                                    }
-                                                } else {
-                                                    micPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                                                }
-                                            },
-                                            onLongClick = {
-                                                showStickerTray = false
-                                                showAttachMenu = false
-                                                showVoiceFilterMenu = !showVoiceFilterMenu
-                                            },
-                                        )
-                                        .testTag("voice_note_button"),
-                                    backgroundColor = if (hasActiveVoiceFilter) Color(0xFFFFD152) else Color.Transparent,
-                                    borderColor = if (hasActiveVoiceFilter || showVoiceFilterMenu) Color(0xFFFFD152) else Color.Transparent,
-                                    cutSize = 2.dp,
-                                    borderWidth = if (hasActiveVoiceFilter || showVoiceFilterMenu) 1.dp else 0.dp,
-                                ) {
-                                    Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                        PixelMicIcon(
-                                            tint = if (hasActiveVoiceFilter) MothBgDark else if (showVoiceFilterMenu) Color(0xFFFFD152) else MutedText,
-                                            modifier = Modifier.size(20.dp),
-                                        )
-                                    }
-                                }
-                            }
-                        }
-
-                        // Pixel wax-seal send button
-                        Box(
-                            modifier = Modifier
-                                .size(42.dp)
-                                .clickable(onClick = { handleSend() })
-                                .testTag("send_message_button"),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            PixelWaxSeal(hasArrow = true)
-                        }
-                    }
-                }
-            }
+                },
+            )
         }
 
-        // Edit Quick Reactions Dialog
         if (showEditReactionsDialog) {
             EditReactionsDialog(
                 currentEmojis = state.customReactionEmojis,
@@ -2057,7 +951,6 @@ fun ChatScreen(
             )
         }
 
-        // Delete Choice Dialog ("Delete for me / Delete for everyone")
         if (deleteTargetMessages.isNotEmpty()) {
             val targets = deleteTargetMessages
             DeleteChoiceDialog(
@@ -2081,12 +974,10 @@ fun ChatScreen(
             )
         }
 
-        // Message Info (WhatsApp-style timestamps) Modal
         infoModalMessage?.let { msg ->
             MessageInfoModal(message = msg, onDismiss = { infoModalMessage = null })
         }
 
-        // Forward Target Picker Modal
         if (forwardModalMessages.isNotEmpty()) {
             val toForward = forwardModalMessages
             ForwardTargetModal(
@@ -2100,7 +991,6 @@ fun ChatScreen(
             )
         }
 
-        // Group Info & Admin Modal
         if (showGroupInfoModal && activeConv != null && activeConv.isGroup) {
             GroupInfoModal(
                 state = state,
@@ -2109,7 +999,6 @@ fun ChatScreen(
             )
         }
 
-        // Extended Contact Profile Overlay (with Shared Media/Files/Voice)
         if (showContactProfileOverlay && !isGroup) {
             ContactProfileOverlay(
                 state = state,
@@ -2125,7 +1014,6 @@ fun ChatScreen(
             )
         }
 
-        // Pixel Sticker Maker Modal
         if (showPixelStickerMaker) {
             PixelStickerMakerDialog(
                 onDismiss = { showPixelStickerMaker = false },
@@ -2139,7 +1027,6 @@ fun ChatScreen(
             )
         }
 
-        // View-Once Protected Media Overlay (enforces FLAG_SECURE & burns on close)
         viewingViewOnceMessage?.let { voMsg ->
             ViewOnceMediaOverlay(
                 state = state,
@@ -2151,115 +1038,36 @@ fun ChatScreen(
             )
         }
 
-        // Fullscreen Photo Viewer Overlay (with Save to Gallery)
         fullScreenPhotoPath?.let { photoPath ->
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(MothBgDark.copy(alpha = 0.96f))
-                    .statusBarsPadding()
-                    .navigationBarsPadding()
-                    .clickable { fullScreenPhotoPath = null }
-                    .padding(16.dp),
-            ) {
-                AsyncImage(
-                    model = File(photoPath),
-                    contentDescription = "Full screen photo",
-                    contentScale = ContentScale.Fit,
-                    modifier = Modifier.fillMaxSize().align(Alignment.Center),
-                )
-                Row(
-                    modifier = Modifier.align(Alignment.TopEnd),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    SteppedButton(
-                        text = "save",
-                        onClick = {
-                            saveMediaFromChat(
-                                localPath = photoPath,
-                                attachmentType = AttachmentType.PHOTO,
-                                mimeType = "image/jpeg",
-                                fileName = File(photoPath).name,
-                            )
-                        },
-                        modifier = Modifier.testTag("save_photo_button"),
-                        backgroundColor = MothHeaderBg,
-                        borderColor = SecureGreen,
-                        textColor = SecureGreen,
-                        cutSize = 3.dp,
+            ChatFullScreenPhotoOverlay(
+                photoPath = photoPath,
+                onSave = {
+                    saveMediaFromChat(
+                        localPath = photoPath,
+                        attachmentType = AttachmentType.PHOTO,
+                        mimeType = "image/jpeg",
+                        fileName = File(photoPath).name,
                     )
-                    SteppedButton(
-                        text = "close",
-                        onClick = { fullScreenPhotoPath = null },
-                        modifier = Modifier.testTag("close_photo_viewer_button"),
-                        backgroundColor = MothHeaderBg,
-                        borderColor = LanternAmber,
-                        textColor = LanternAmber,
-                        cutSize = 3.dp,
-                    )
-                }
-            }
+                },
+                onClose = { fullScreenPhotoPath = null },
+            )
         }
 
-        // Fullscreen Video Player Overlay (with Save to Movies)
         fullScreenVideoPath?.let { videoPath ->
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(MothBgDark.copy(alpha = 0.96f))
-                    .statusBarsPadding()
-                    .navigationBarsPadding()
-                    .padding(16.dp),
-            ) {
-                AndroidView(
-                    factory = { ctx ->
-                        VideoView(ctx).apply {
-                            val controller = MediaController(ctx)
-                            controller.setAnchorView(this)
-                            setMediaController(controller)
-                            setVideoURI(Uri.fromFile(File(videoPath)))
-                            setOnPreparedListener { start() }
-                        }
-                    },
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .heightIn(min = 240.dp, max = 520.dp)
-                        .align(Alignment.Center),
-                )
-                Row(
-                    modifier = Modifier.align(Alignment.TopEnd),
-                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    SteppedButton(
-                        text = "save",
-                        onClick = {
-                            saveMediaFromChat(
-                                localPath = videoPath,
-                                attachmentType = AttachmentType.VIDEO,
-                                mimeType = "video/mp4",
-                                fileName = File(videoPath).name,
-                            )
-                        },
-                        modifier = Modifier.testTag("save_video_button"),
-                        backgroundColor = MothHeaderBg,
-                        borderColor = SecureGreen,
-                        textColor = SecureGreen,
-                        cutSize = 3.dp,
+            ChatFullScreenVideoOverlay(
+                videoPath = videoPath,
+                onSave = {
+                    saveMediaFromChat(
+                        localPath = videoPath,
+                        attachmentType = AttachmentType.VIDEO,
+                        mimeType = "video/mp4",
+                        fileName = File(videoPath).name,
                     )
-                    SteppedButton(
-                        text = "close",
-                        onClick = { fullScreenVideoPath = null },
-                        modifier = Modifier.testTag("close_video_viewer_button"),
-                        backgroundColor = MothHeaderBg,
-                        borderColor = LanternAmber,
-                        textColor = LanternAmber,
-                        cutSize = 3.dp,
-                    )
-                }
-            }
+                },
+                onClose = { fullScreenVideoPath = null },
+            )
         }
 
-        // Photo Sticker Interactive Cropper
         pendingStickerCropUri?.let { cropUri ->
             ImageCropDialog(
                 imageUri = cropUri,
@@ -2283,182 +1091,34 @@ fun ChatScreen(
             )
         }
 
-        // Unpin Confirmation Modal
         unpinConfirmMessage?.let { targetMsg ->
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color(0xBB1A1633))
-                    .clickable { unpinConfirmMessage = null }
-                    .padding(24.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                SteppedBox(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(enabled = false) { }
-                        .testTag("unpin_confirm_dialog"),
-                    backgroundColor = MothHeaderBg,
-                    borderColor = LanternAmber,
-                    cutSize = 4.dp,
-                ) {
-                    Column(
-                        modifier = Modifier.padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        Text(
-                            text = "unpin message?",
-                            fontFamily = PixelifySans,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 15.sp,
-                            color = LanternAmber,
-                        )
-                        val snippet = targetMsg.text.ifBlank {
-                            targetMsg.attachmentName ?: "pinned message"
-                        }
-                        Text(
-                            text = "\"${snippet.take(80)}\"",
-                            fontFamily = PixelifySans,
-                            fontSize = 12.sp,
-                            color = TheirBubbleText,
-                            maxLines = 2,
-                            overflow = TextOverflow.Ellipsis,
-                        )
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            SteppedButton(
-                                text = "cancel",
-                                onClick = { unpinConfirmMessage = null },
-                                backgroundColor = MothBgDark,
-                                borderColor = TheirBubbleBorder,
-                                textColor = MutedText,
-                                modifier = Modifier.weight(1f).testTag("cancel_unpin_button"),
-                                cutSize = 3.dp,
-                            )
-                            SteppedButton(
-                                text = "unpin",
-                                onClick = {
-                                    state.togglePinMessage(activeChatId, targetMsg.id)
-                                    unpinConfirmMessage = null
-                                },
-                                backgroundColor = MyBubbleFill,
-                                borderColor = MyBubbleBorder,
-                                textColor = MyBubbleText,
-                                modifier = Modifier.weight(1f).testTag("confirm_unpin_button"),
-                                cutSize = 3.dp,
-                            )
-                        }
-                    }
-                }
-            }
+            ChatUnpinConfirmDialog(
+                targetMsg = targetMsg,
+                onCancel = { unpinConfirmMessage = null },
+                onConfirmUnpin = {
+                    state.togglePinMessage(activeChatId, targetMsg.id)
+                    unpinConfirmMessage = null
+                },
+            )
         }
 
-        // Sticker Hold Options Modal (Unfavourite / Delete)
         holdStickerTarget?.let { sticker ->
-            Box(
-                modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color(0xBB1A1633))
-                    .clickable { holdStickerTarget = null }
-                    .padding(24.dp),
-                contentAlignment = Alignment.Center,
-            ) {
-                SteppedBox(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .clickable(enabled = false) { }
-                        .testTag("sticker_hold_dialog"),
-                    backgroundColor = MothHeaderBg,
-                    borderColor = LanternAmber,
-                    cutSize = 4.dp,
-                ) {
-                    Column(
-                        modifier = Modifier.padding(18.dp),
-                        verticalArrangement = Arrangement.spacedBy(12.dp),
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                        ) {
-                            SteppedBox(
-                                modifier = Modifier.size(52.dp),
-                                backgroundColor = MothBgDark,
-                                borderColor = TheirBubbleBorder,
-                                cutSize = 3.dp,
-                                borderWidth = 1.dp,
-                            ) {
-                                Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                                    AsyncImage(
-                                        model = File(sticker.imageLocalPath),
-                                        contentDescription = sticker.label,
-                                        contentScale = ContentScale.Fit,
-                                        filterQuality = FilterQuality.None,
-                                        modifier = Modifier.size(40.dp),
-                                    )
-                                }
-                            }
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    text = "sticker options",
-                                    fontFamily = PixelifySans,
-                                    fontWeight = FontWeight.Bold,
-                                    fontSize = 15.sp,
-                                    color = LanternAmber,
-                                )
-                                Text(
-                                    text = sticker.label,
-                                    fontFamily = PixelifySans,
-                                    fontSize = 12.sp,
-                                    color = MutedText,
-                                    maxLines = 1,
-                                    overflow = TextOverflow.Ellipsis,
-                                )
-                            }
-                        }
-
-                        SteppedButton(
-                            text = "unfavourite",
-                            onClick = {
-                                state.deleteSticker(sticker.id)
-                                actionNotice = "removed from favourites"
-                                holdStickerTarget = null
-                            },
-                            backgroundColor = MothBgDark,
-                            borderColor = LanternAmber,
-                            textColor = LanternAmber,
-                            modifier = Modifier.fillMaxWidth().testTag("sticker_unfavourite_button"),
-                            cutSize = 3.dp,
-                        )
-                        SteppedButton(
-                            text = "delete",
-                            onClick = {
-                                state.deleteSticker(sticker.id)
-                                actionNotice = "sticker deleted"
-                                holdStickerTarget = null
-                            },
-                            backgroundColor = MothBgDark,
-                            borderColor = WaxSealRed,
-                            textColor = WaxSealRed,
-                            modifier = Modifier.fillMaxWidth().testTag("sticker_delete_button"),
-                            cutSize = 3.dp,
-                        )
-                        SteppedButton(
-                            text = "cancel",
-                            onClick = { holdStickerTarget = null },
-                            backgroundColor = TheirBubbleFill,
-                            borderColor = TheirBubbleBorder,
-                            textColor = MutedText,
-                            modifier = Modifier.fillMaxWidth().testTag("sticker_hold_cancel_button"),
-                            cutSize = 3.dp,
-                        )
-                    }
-                }
-            }
+            ChatStickerHoldOptionsDialog(
+                sticker = sticker,
+                onUnfavourite = {
+                    state.deleteSticker(sticker.id)
+                    actionNotice = "removed from favourites"
+                    holdStickerTarget = null
+                },
+                onDelete = {
+                    state.deleteSticker(sticker.id)
+                    actionNotice = "sticker deleted"
+                    holdStickerTarget = null
+                },
+                onCancel = { holdStickerTarget = null },
+            )
         }
 
-        // Brief floating notice toast for save / favourite sticker confirmations
         actionNotice?.let { noticeText ->
             SteppedBox(
                 modifier = Modifier
@@ -2484,7 +1144,7 @@ fun ChatScreen(
 }
 
 @Composable
-private fun SwipeToReplyContainer(
+internal fun SwipeToReplyContainer(
     enabled: Boolean,
     onSwipedToReply: () -> Unit,
     content: @Composable () -> Unit,
@@ -2525,7 +1185,7 @@ private fun SwipeToReplyContainer(
 }
 
 @Composable
-private fun InputModeBanner(
+internal fun InputModeBanner(
     label: String,
     preview: String,
     onCancel: () -> Unit,
@@ -2555,7 +1215,7 @@ private fun InputModeBanner(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun StickerTrayItem(
+internal fun StickerTrayItem(
     sticker: MothSticker,
     onSend: () -> Unit,
     onHold: () -> Unit,
@@ -2595,7 +1255,7 @@ private fun StickerTrayItem(
 }
 
 @Composable
-private fun PixelStickerMakerDialog(
+internal fun PixelStickerMakerDialog(
     onDismiss: () -> Unit,
     onSave: (String, List<Int>) -> Unit,
 ) {
@@ -2606,13 +1266,13 @@ private fun PixelStickerMakerDialog(
 
     val palette = listOf(
         LanternAmber, LanternGlow, WaxSealRed, SecureGreen,
-        TheirBubbleText, TheirBubbleBorder, Color(0xFF70D6FF), Color(0xFF1A1633),
+        TheirBubbleText, TheirBubbleBorder, Color(0xFF70D6FF), MothInkDark,
     )
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0xCC1A1633))
+            .background(MothScrimStrong)
             .clickable { onDismiss() }
             .padding(20.dp),
         contentAlignment = Alignment.Center,
@@ -2645,7 +1305,7 @@ private fun PixelStickerMakerDialog(
                 ) {
                     Box(modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp), contentAlignment = Alignment.CenterStart) {
                         if (label.isEmpty()) {
-                            Text("sticker name (e.g. happy moth)", fontFamily = PixelifySans, fontSize = 12.sp, color = PlaceholderText)
+                            Text(if (isBloomTheme) "sticker name (e.g. happy bee)" else "sticker name (e.g. happy moth)", fontFamily = PixelifySans, fontSize = 12.sp, color = PlaceholderText)
                         }
                         BasicTextField(
                             value = label,
@@ -2670,7 +1330,7 @@ private fun PixelStickerMakerDialog(
                                 Box(
                                     modifier = Modifier
                                         .size(22.dp)
-                                        .background(if (cellArgb == 0) Color(0xFF231E4A) else Color(cellArgb))
+                                        .background(if (cellArgb == 0) MothHeaderBg else Color(cellArgb))
                                         .clickable { cells[idx] = if (cells[idx] == selectedColor) 0 else selectedColor },
                                 )
                             }
@@ -2734,7 +1394,7 @@ private fun PixelStickerMakerDialog(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun StandardMessageBubble(
+internal fun StandardMessageBubble(
     message: MothMessage,
     fontScale: Float,
     isGroup: Boolean,
@@ -2947,7 +1607,7 @@ private fun StandardMessageBubble(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun DisappearingMessageBubble(
+internal fun DisappearingMessageBubble(
     message: MothMessage,
     litEmbers: Int,
     fontScale: Float,
@@ -3022,7 +1682,11 @@ private fun DisappearingMessageBubble(
         ) {
             DisappearingEmbers(total = 10, litCount = litEmbers)
             Text(
-                text = if (message.leaveTrace) "burning • leaves ash" else "burning down",
+                text = if (isBloomTheme) {
+                    if (message.leaveTrace) "petals falling • leaves seed" else "petals falling"
+                } else {
+                    if (message.leaveTrace) "burning • leaves ash" else "burning down"
+                },
                 fontFamily = PixelifySans,
                 fontSize = 11.sp,
                 color = MutedText,
@@ -3082,7 +1746,7 @@ private fun InlineReceiptLine(message: MothMessage) {
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun BurnedTraceBubble(
+internal fun BurnedTraceBubble(
     message: MothMessage,
     fontScale: Float,
     inSelectionMode: Boolean = false,
@@ -3123,7 +1787,7 @@ private fun BurnedTraceBubble(
                         color = MyBubbleText,
                     )
                     Text(
-                        text = "ash memory • tap to hide",
+                        text = if (isBloomTheme) "seed memory • tap to hide" else "ash memory • tap to hide",
                         fontFamily = PixelifySans,
                         fontSize = 10.sp,
                         color = MyBubbleText.copy(alpha = 0.75f),
@@ -3158,9 +1822,14 @@ private fun BurnedTraceBubble(
                 ) {
                     Box(modifier = Modifier.size(6.dp).background(WaxSealRed))
                     Column {
-                        Text(text = "a burning message turned to ash", fontFamily = PixelifySans, fontSize = 12.sp, color = MutedText)
+                        Text(
+                            text = if (isBloomTheme) "flower withered • petals fell" else "a burning message turned to ash",
+                            fontFamily = PixelifySans,
+                            fontSize = 12.sp,
+                            color = MutedText,
+                        )
                         if (canPeek) {
-                            Text(text = "tap trace to peek", fontFamily = PixelifySans, fontSize = 10.sp, color = PlaceholderText)
+                            Text(text = if (isBloomTheme) "tap seed to peek" else "tap trace to peek", fontFamily = PixelifySans, fontSize = 10.sp, color = PlaceholderText)
                         }
                     }
                 }
@@ -3171,7 +1840,7 @@ private fun BurnedTraceBubble(
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun ViewOnceCard(
+internal fun ViewOnceCard(
     message: MothMessage,
     isReceiptExpanded: Boolean,
     isJumpHighlighted: Boolean = false,
@@ -3191,9 +1860,9 @@ private fun ViewOnceCard(
         else -> "view once $mediaWord"
     }
     val subtitle = when {
-        isBurned -> "sealed in ash"
+        isBurned -> if (isBloomTheme) "flower withered" else "sealed in ash"
         message.isMine -> "sent • view once"
-        else -> "tap to view"
+        else -> if (isBloomTheme) "tap to bloom" else "tap to view"
     }
 
     Column(
@@ -3327,7 +1996,7 @@ private fun BubbleBodyContent(
             ) {
                 Column {
                     Text(
-                        text = "@${message.replyToSender ?: "lantern"}",
+                        text = "@${message.replyToSender ?: if (isBloomTheme) "bloom" else "lantern"}",
                         fontFamily = PixelifySans,
                         fontWeight = FontWeight.Bold,
                         fontSize = 10.sp,
@@ -3772,14 +2441,14 @@ private fun ReactionsChipRow(
     }
 }
 
-private fun formatFileSize(bytes: Long): String {
+internal fun formatFileSize(bytes: Long): String {
     if (bytes <= 0L) return "0 B"
     val kb = bytes / 1024.0
     return if (kb >= 1.0) "${kb.toInt()} KB" else "$bytes B"
 }
 
 @Composable
-private fun TypingIndicatorRow() {
+internal fun TypingIndicatorRow() {
     Row(
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(8.dp),

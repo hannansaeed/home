@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="240dp"
+    android:height="210dp"
+    android:viewportWidth="240"
+    android:viewportHeight="210">
+
+    <!-- Pixel Stars matching MothOpeningSplash / PixelStarfield -->
+    <path android:fillColor="#4D9A93D6" android:pathData="M24,18h3v3h-3z" />
+    <path android:fillColor="#66FFFAE0" android:pathData="M56,34h3v3h-3z" />
+    <path android:fillColor="#4D9A93D6" android:pathData="M188,22h3v3h-3z" />
+    <path android:fillColor="#66FFFAE0" android:pathData="M214,42h3v3h-3z" />
+    <path android:fillColor="#4D9A93D6" android:pathData="M36,120h3v3h-3z" />
+    <path android:fillColor="#4D9A93D6" android:pathData="M198,116h3v3h-3z" />
+
+    <!-- Left Pixel Moth -->
+    <group android:translateX="26" android:translateY="68">
+        <path android:fillColor="#FFF4E4C1" android:pathData="M10.67,2.67h2.67v8h-2.67z M9.33,0h1.33v2.67h-1.33z M13.33,0h1.33v2.67h-1.33z" />
+        <path android:fillColor="#FFD3C5FF" android:pathData="M0,0h8v2.67h-8z M2.67,2.67h8v2.67h-8z M5.33,5.33h5.33v2.67h-5.33z M16,0h8v2.67h-8z M13.33,2.67h8v2.67h-8z M13.33,5.33h5.33v2.67h-5.33z" />
+    </group>
+
+    <!-- Center Large Hanging Lantern -->
+    <group android:translateX="70" android:translateY="15">
+        <path android:fillColor="#FFA36724" android:pathData="M47.5,0h5v25h-5z M40,25h20v5h-20z M35,30h30v5h-30z M30,35h40v5h-40z M30,85h40v5h-40z M35,90h30v5h-30z M40,95h20v5h-20z M45,100h10v5h-10z" />
+        <path android:fillColor="#FFFFB43B" android:pathData="M25,40h50v45h-50z" />
+        <path android:fillColor="#FFFFF2D1" android:pathData="M35,45h30v35h-30z" />
+        <path android:fillColor="#FFFFFFFF" android:pathData="M42.5,52.5h15v20h-15z" />
+        <path android:fillColor="#FF8C581E" android:pathData="M10,40h7.5v7.5h-7.5z M82.5,40h7.5v7.5h-7.5z M2.5,65h7.5v7.5h-7.5z M90,65h7.5v7.5h-7.5z M10,90h7.5v7.5h-7.5z M82.5,90h7.5v7.5h-7.5z M30,105h7.5v7.5h-7.5z M62.5,105h7.5v7.5h-7.5z" />
+    </group>
+
+    <!-- Right Pixel Moth -->
+    <group android:translateX="190" android:translateY="68">
+        <path android:fillColor="#FFF4E4C1" android:pathData="M10.67,2.67h2.67v8h-2.67z M9.33,0h1.33v2.67h-1.33z M13.33,0h1.33v2.67h-1.33z" />
+        <path android:fillColor="#FFD3C5FF" android:pathData="M0,0h8v2.67h-8z M2.67,2.67h8v2.67h-8z M5.33,5.33h5.33v2.67h-5.33z M16,0h8v2.67h-8z M13.33,2.67h8v2.67h-8z M13.33,5.33h5.33v2.67h-5.33z" />
+    </group>
+
+    <!-- Pixel Wordmark: "farlight" (34x9 grid scaled 3.5x = 119x31.5 centered at x=60.5, y=156) -->
+    <group android:translateX="60.5" android:translateY="156" android:scaleX="3.5" android:scaleY="3.5">
+        <path
+            android:fillColor="#FFFFB43B"
+            android:pathData="M1,0h3v1h-3z M1,1h1v6h-1z M0,2h4v1h-4z M6,2h2v1h-2z M8,3h1v4h-1z M6,4h2v1h-2z M5,5h1v1h-1z M6,6h2v1h-2z M10,2h1v5h-1z M11,3h1v1h-1z M12,2h2v1h-2z M15,0h1v6h-1z M16,6h1v1h-1z M18,0h1v1h-1z M18,2h1v5h-1z M21,2h2v1h-2z M20,3h1v3h-1z M23,2h1v6h-1z M21,6h2v1h-2z M20,8h3v1h-3z M25,0h1v7h-1z M26,2h2v1h-2z M28,3h1v4h-1z M31,0h1v6h-1z M30,2h3v1h-3z M32,6h2v1h-2z" />
+    </group>
+</vector>

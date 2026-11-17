@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<animated-vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:drawable="@drawable/splash_lantern_animated_base">
+    <target
+        android:name="lantern_scale_group"
+        android:animation="@animator/splash_lantern_scale" />
+    <target
+        android:name="lantern_body_path"
+        android:animation="@animator/splash_lantern_glow" />
+    <target
+        android:name="lantern_glow_path"
+        android:animation="@animator/splash_lantern_glow" />
+    <target
+        android:name="left_moth_wings"
+        android:animation="@animator/splash_moth_flap" />
+    <target
+        android:name="right_moth_wings"
+        android:animation="@animator/splash_moth_flap" />
+</animated-vector>

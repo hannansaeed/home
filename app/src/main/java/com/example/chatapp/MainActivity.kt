@@ -59,6 +59,7 @@ import com.example.chatapp.ui.components.LargeHangingLantern
 import com.example.chatapp.ui.components.PixelLantern
 import com.example.chatapp.ui.components.PixelMoth
 import com.example.chatapp.ui.components.PixelStarfield
+import com.example.chatapp.ui.moth.MothBackgroundSync
 import com.example.chatapp.ui.moth.MothState
 import com.example.chatapp.ui.theme.*
 import dagger.hilt.android.AndroidEntryPoint
@@ -75,10 +76,24 @@ class MainActivity : ComponentActivity() {
     private var pendingChatTarget by mutableStateOf<String?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        val bootPrefs = getSharedPreferences("moth_session_prefs", Context.MODE_PRIVATE)
+        val savedFontId = bootPrefs.getString("pref_app_font", AppFontOption.PIXELIFY_SANS.id)
+        val savedThemeId = bootPrefs.getString("pref_app_theme", AppThemeOption.LANTERN_NIGHT.id)
+        PixelifySans = AppFontOption.fromId(savedFontId).fontFamily
+        activeAppTheme = AppThemeOption.fromId(savedThemeId)
+
         super.onCreate(savedInstanceState)
         enableEdgeToEdge(
-            statusBarStyle = SystemBarStyle.dark(AndroidColor.TRANSPARENT),
-            navigationBarStyle = SystemBarStyle.dark(AndroidColor.TRANSPARENT),
+            statusBarStyle = if (isBloomTheme) {
+                SystemBarStyle.light(AndroidColor.TRANSPARENT, AndroidColor.TRANSPARENT)
+            } else {
+                SystemBarStyle.dark(AndroidColor.TRANSPARENT)
+            },
+            navigationBarStyle = if (isBloomTheme) {
+                SystemBarStyle.light(AndroidColor.TRANSPARENT, AndroidColor.TRANSPARENT)
+            } else {
+                SystemBarStyle.dark(AndroidColor.TRANSPARENT)
+            },
         )
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
             window.isNavigationBarContrastEnforced = false
@@ -86,7 +101,22 @@ class MainActivity : ComponentActivity() {
         pendingChatTarget = intent?.getStringExtra("open_chat_user")
 
         setContent {
-            ChatTheme {
+            val lightBars = isBloomTheme
+            LaunchedEffect(lightBars) {
+                enableEdgeToEdge(
+                    statusBarStyle = if (lightBars) {
+                        SystemBarStyle.light(AndroidColor.TRANSPARENT, AndroidColor.TRANSPARENT)
+                    } else {
+                        SystemBarStyle.dark(AndroidColor.TRANSPARENT)
+                    },
+                    navigationBarStyle = if (lightBars) {
+                        SystemBarStyle.light(AndroidColor.TRANSPARENT, AndroidColor.TRANSPARENT)
+                    } else {
+                        SystemBarStyle.dark(AndroidColor.TRANSPARENT)
+                    },
+                )
+            }
+            ChatTheme(appFontFamily = PixelifySans, themeOption = activeAppTheme) {
                 Surface(
                     modifier = Modifier.fillMaxSize(),
                     color = MothBgDark,
@@ -166,13 +196,20 @@ fun MothApp(
         mothState = state
     }
 
-    // Preserve the exact 1450ms lantern animation timing while waiting for concurrent state
+    // Preserve smooth lantern animation transition over the window splash
     LaunchedEffect(Unit) {
-        delay(1450L)
+        delay(950L)
         while (mothState == null) {
             delay(50L)
         }
         showOpeningSplash = false
+    }
+
+    DisposableEffect(mothState) {
+        val current = mothState
+        onDispose {
+            current?.dispose()
+        }
     }
 
     Box(modifier = Modifier.fillMaxSize()) {
@@ -221,17 +258,25 @@ fun MothNavigationRoot(
 
     val notificationPermissionLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.RequestPermission()
-    ) { _ -> }
+    ) { granted ->
+        if (granted && mothState.isLoggedIn) {
+            MothBackgroundSync.syncState(context)
+        }
+    }
 
-    // Request POST_NOTIFICATIONS runtime permission on Android 13+ once logged in
+    // Request POST_NOTIFICATIONS runtime permission on Android 13+ once logged in,
+    // and ensure background messaging listener / periodic fallback worker are active.
     LaunchedEffect(mothState.isLoggedIn) {
-        if (mothState.isLoggedIn && Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
-            val granted = ContextCompat.checkSelfPermission(
-                context,
-                Manifest.permission.POST_NOTIFICATIONS
-            ) == PackageManager.PERMISSION_GRANTED
-            if (!granted) {
-                notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+        if (mothState.isLoggedIn) {
+            MothBackgroundSync.syncState(context)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                val granted = ContextCompat.checkSelfPermission(
+                    context,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED
+                if (!granted) {
+                    notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
+                }
             }
         }
     }
@@ -276,7 +321,7 @@ fun MothNavigationRoot(
                 MothScreen.Home -> ChatListScreen(
                     state = mothState,
                     onOpenChat = { title ->
-                        if (mothState.activeChatId == null) {
+                        if (!mothState.activeChatId.equals("${mothState.currentUsername.lowercase()}::${title.trim().removePrefix("@").lowercase()}", ignoreCase = true)) {
                             mothState.openConversation(title)
                         }
                         currentScreen = MothScreen.Chat(title)
@@ -410,7 +455,7 @@ private fun AppLockOverlay(onUnlock: (String) -> Boolean) {
             ) {
                 PixelLantern(isLit = false)
                 Text(
-                    text = "lantern locked",
+                    text = if (isBloomTheme) "garden locked" else "lantern locked",
                     fontFamily = PixelifySans,
                     fontWeight = FontWeight.Bold,
                     fontSize = 18.sp,

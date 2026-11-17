@@ -577,7 +577,7 @@ fun EditReactionsDialog(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0x991A1633))
+            .background(MothScrimSoft)
             .clickable(onClick = onDismiss)
             .padding(16.dp),
         contentAlignment = Alignment.Center,
@@ -924,7 +924,7 @@ fun DeleteChoiceDialog(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0x991A1633))
+            .background(MothScrimSoft)
             .clickable(onClick = onDismiss)
             .padding(24.dp),
         contentAlignment = Alignment.Center,
@@ -996,7 +996,7 @@ fun MessageInfoModal(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0x991A1633))
+            .background(MothScrimSoft)
             .clickable(onClick = onDismiss)
             .padding(24.dp),
         contentAlignment = Alignment.Center,
@@ -1192,7 +1192,7 @@ fun ViewOnceMediaOverlay(
             modifier = Modifier
                 .align(Alignment.TopCenter)
                 .fillMaxWidth()
-                .background(Color(0xCC1A1633))
+                .background(MothScrimStrong)
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically,
@@ -1211,7 +1211,7 @@ fun ViewOnceMediaOverlay(
                         color = LanternAmber,
                     )
                     Text(
-                        text = "screen capture blocked • burns on close",
+                        text = if (isBloomTheme) "screen capture blocked • withers on close" else "screen capture blocked • burns on close",
                         fontFamily = PixelifySans,
                         fontSize = 10.sp,
                         color = MutedText,
@@ -1236,7 +1236,7 @@ fun ViewOnceMediaOverlay(
                 modifier = Modifier
                     .align(Alignment.BottomCenter)
                     .fillMaxWidth()
-                    .background(Color(0xCC1A1633))
+                    .background(MothScrimStrong)
                     .padding(horizontal = 20.dp, vertical = 14.dp),
                 contentAlignment = Alignment.Center,
             ) {
@@ -1387,7 +1387,7 @@ fun ContactProfileOverlay(
                                     .background(if (isOnline) SecureGreen else MutedText),
                             )
                             Text(
-                                text = if (isLoading && profileDetails == null) "checking lantern..." else statusText,
+                                text = if (isLoading && profileDetails == null) (if (isBloomTheme) "checking garden..." else "checking lantern...") else if (isBloomTheme && statusText == "active") "rooted" else statusText,
                                 fontFamily = PixelifySans,
                                 fontSize = 12.sp,
                                 color = if (isOnline) SecureGreen else MutedText,
@@ -1453,7 +1453,7 @@ fun ContactProfileOverlay(
                         modifier = Modifier.padding(14.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp),
                     ) {
-                        InfoRow("joined", profileDetails?.joinedLabel ?: if (isSupport) "system lantern" else "loading...")
+                        InfoRow("joined", profileDetails?.joinedLabel ?: if (isSupport) (if (isBloomTheme) "system garden" else "system lantern") else "loading...")
                         InfoRow("messages", "${profileDetails?.localMessageCount ?: messages.size}", LanternAmber)
                         InfoRow("cipher", "ECDH P-256 + AES-GCM", SecureGreen)
                         InfoRow("key id", state.getPeerKeyFingerprint(contactUsername), MutedText)
@@ -1741,7 +1741,7 @@ fun ForwardTargetModal(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0x991A1633))
+            .background(MothScrimSoft)
             .clickable(onClick = onDismiss)
             .padding(24.dp),
         contentAlignment = Alignment.Center,
@@ -1830,7 +1830,7 @@ fun GroupInfoModal(
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(Color(0x991A1633))
+            .background(MothScrimSoft)
             .clickable(onClick = onDismiss)
             .padding(20.dp),
         contentAlignment = Alignment.Center,

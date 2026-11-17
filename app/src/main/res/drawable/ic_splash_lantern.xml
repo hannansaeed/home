@@ -1,0 +1,36 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="100dp"
+    android:height="120dp"
+    android:viewportWidth="20"
+    android:viewportHeight="24">
+
+    <!-- Hanging cord & top cap -->
+    <path
+        android:fillColor="#FFA36724"
+        android:pathData="M9.5,0h1v5h-1z M8,5h4v1h-4z M7,6h6v1h-6z M6,7h8v1h-8z" />
+
+    <!-- Lantern amber body -->
+    <path
+        android:fillColor="#FFFFB43B"
+        android:pathData="M5,8h10v9h-10z" />
+
+    <!-- Inner glowing core -->
+    <path
+        android:fillColor="#FFFFF2D1"
+        android:pathData="M7,9h6v7h-6z" />
+
+    <!-- White hot core -->
+    <path
+        android:fillColor="#FFFFFFFF"
+        android:pathData="M8.5,10.5h3v4h-3z" />
+
+    <!-- Bottom cap -->
+    <path
+        android:fillColor="#FFA36724"
+        android:pathData="M6,17h8v1h-8z M7,18h6v1h-6z M8,19h4v1h-4z M9,20h2v1h-2z" />
+
+    <!-- Orbiting ember pixels -->
+    <path
+        android:fillColor="#FF8C581E"
+        android:pathData="M2,8h1.5v1.5h-1.5z M16.5,8h1.5v1.5h-1.5z M0.5,13h1.5v1.5h-1.5z M18,13h1.5v1.5h-1.5z M2,18h1.5v1.5h-1.5z M16.5,18h1.5v1.5h-1.5z M6,21h1.5v1.5h-1.5z M12.5,21h1.5v1.5h-1.5z" />
+</vector>

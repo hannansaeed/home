@@ -1,6 +1,7 @@
 package com.example.chatapp
 
 import android.app.Application
+import com.example.chatapp.ui.moth.MothBackgroundSync
 import com.google.firebase.FirebaseApp
 import dagger.hilt.android.HiltAndroidApp
 
@@ -13,5 +14,6 @@ class ChatApp : Application() {
         } catch (e: Exception) {
             // Ignore if already initialized
         }
+        MothBackgroundSync.scheduleWorkerIfNeeded(this)
     }
 }

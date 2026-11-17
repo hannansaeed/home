@@ -106,7 +106,7 @@ fun CallHistoryEmptyPage(
             ) {
                 Column {
                     Text(
-                        text = "lantern calls",
+                        text = if (isBloomTheme) "garden calls" else "lantern calls",
                         fontFamily = PixelifySans,
                         fontWeight = FontWeight.Bold,
                         fontSize = 18.sp,

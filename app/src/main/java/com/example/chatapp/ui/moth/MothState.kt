@@ -38,6 +38,10 @@ import androidx.core.content.FileProvider
 import androidx.core.graphics.drawable.IconCompat
 import com.example.chatapp.MainActivity
 import com.example.chatapp.R
+import com.example.chatapp.ui.theme.AppFontOption
+import com.example.chatapp.ui.theme.AppThemeOption
+import com.example.chatapp.ui.theme.PixelifySans
+import com.example.chatapp.ui.theme.activeAppTheme
 import java.lang.ref.WeakReference
 import com.example.chatapp.ui.components.decodeOrientedBitmap
 import com.example.chatapp.crypto.EcdhAesGcmCrypto
@@ -58,6 +62,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -85,11 +90,16 @@ class SafExportRequiredException(
     val mimeType: String,
 ) : Exception("SAF export required on Android < 10")
 
-class MothState(private val context: Context, private val scope: CoroutineScope) {
+class MothState(
+    private val context: Context,
+    private val scope: CoroutineScope,
+    private val startLiveStreams: Boolean = true,
+) {
     private val appContext = context.applicationContext
     private val prefs = appContext.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
     private val mothDao by lazy { ChatDatabaseProvider.get(appContext).mothDao() }
     val mediaDir: File by lazy { File(appContext.filesDir, "moth_media").apply { mkdirs() } }
+    private val instanceToken = UUID.randomUUID().toString()
 
     private val db: FirebaseFirestore by lazy {
         try {
@@ -127,6 +137,14 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         private set
     var messageFontScale by mutableStateOf(prefs.getFloat(KEY_FONT_SCALE, 1.0f))
         private set
+    var selectedFontId by mutableStateOf(
+        prefs.getString(KEY_APP_FONT, AppFontOption.PIXELIFY_SANS.id) ?: AppFontOption.PIXELIFY_SANS.id
+    )
+        private set
+    var selectedThemeId by mutableStateOf(
+        prefs.getString(KEY_APP_THEME, AppThemeOption.LANTERN_NIGHT.id) ?: AppThemeOption.LANTERN_NIGHT.id
+    )
+        private set
     var appLockEnabled by mutableStateOf(prefs.getBoolean(KEY_APP_LOCK_ENABLED, false))
         private set
     var isAppLocked by mutableStateOf(false)
@@ -162,7 +180,8 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
     var myScreentimeSummary by mutableStateOf(ScreentimeUserSummary(username = ""))
 
     @Volatile private var volatileActiveChatId: String? = null
-    @Volatile private var volatileIsAppInForeground: Boolean = true
+    @Volatile private var volatileIsAppInForeground: Boolean = startLiveStreams
+    @Volatile private var isDisposed: Boolean = false
     private var foregroundSessionStartedAtMs: Long = System.currentTimeMillis()
 
     private var localChatsJob: Job? = null
@@ -207,38 +226,56 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
     }
 
     init {
-        activeInstanceRef = WeakReference(this)
+        if (!startLiveStreams) {
+            isAppInForeground = false
+            volatileIsAppInForeground = false
+        }
+        val fontOption = AppFontOption.fromId(selectedFontId)
+        selectedFontId = fontOption.id
+        PixelifySans = fontOption.fontFamily
+
+        val themeOption = AppThemeOption.fromId(selectedThemeId)
+        selectedThemeId = themeOption.id
+        activeAppTheme = themeOption
+
         val savedUser = prefs.getString(KEY_LOGGED_IN_USER, "")?.trim()?.lowercase().orEmpty()
         val savedColorArgb = prefs.getInt(KEY_AVATAR_COLOR, Color(0xFFB8A9E8).toArgb())
         userAvatarColor = Color(savedColorArgb)
 
         if (savedUser.isNotBlank()) {
             currentUsername = savedUser
-            if (appLockEnabled && !prefs.getString(KEY_APP_LOCK_PIN_HASH, null).isNullOrBlank()) {
+            if (!startLiveStreams) {
+                crypto.initializeForUser(savedUser)
+            }
+            if (startLiveStreams && appLockEnabled && !prefs.getString(KEY_APP_LOCK_PIN_HASH, null).isNullOrBlank()) {
                 isAppLocked = true
             }
         }
 
-        // Move Room / Keystore / filesystem / notification channel / Firestore bootstrap off main thread
-        ioScope.launch {
-            ensureNotificationChannel()
-            if (savedUser.isNotBlank() && currentUsername == savedUser) {
-                loadSavedAvatarForUser(savedUser)
-                startSessionStreams(savedUser)
-            }
-            try {
-                val supportRef = db.collection("users").document("support")
-                val snap = supportRef.get().await()
-                if (!snap.exists()) {
-                    supportRef.set(
-                        mapOf(
-                            "username" to "support",
-                            "passphrase" to "support123",
-                            "createdAt" to FieldValue.serverTimestamp()
-                        )
-                    ).await()
+        if (startLiveStreams) {
+            activeInstanceRef = WeakReference(this)
+            globalActiveInstanceId = instanceToken
+            // Move Room / Keystore / filesystem / notification channel / Firestore bootstrap off main thread
+            ioScope.launch {
+                ensureNotificationChannel()
+                if (savedUser.isNotBlank() && currentUsername == savedUser) {
+                    loadSavedAvatarForUser(savedUser)
+                    startSessionStreams(savedUser)
                 }
-            } catch (_: Exception) {}
+                try {
+                    val supportRef = db.collection("users").document("support")
+                    val snap = supportRef.get().await()
+                    if (!snap.exists()) {
+                        supportRef.set(
+                            mapOf(
+                                "username" to "support",
+                                "passphrase" to "support123",
+                                "createdAt" to FieldValue.serverTimestamp()
+                            )
+                        ).await()
+                    }
+                } catch (_: Exception) {}
+            }
         }
     }
 
@@ -269,14 +306,28 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         prefs.edit().putFloat(KEY_FONT_SCALE, scale).apply()
     }
 
+    fun setAppFont(option: AppFontOption) {
+        selectedFontId = option.id
+        PixelifySans = option.fontFamily
+        prefs.edit().putString(KEY_APP_FONT, option.id).apply()
+    }
+
+    fun setAppTheme(option: AppThemeOption) {
+        selectedThemeId = option.id
+        activeAppTheme = option
+        prefs.edit().putString(KEY_APP_THEME, option.id).apply()
+    }
+
     fun setMessageNotifications(enabled: Boolean) {
         messageNotificationsEnabled = enabled
         prefs.edit().putBoolean(KEY_MSG_NOTIF, enabled).apply()
+        MothBackgroundSync.syncState(appContext)
     }
 
     fun setCallNotifications(enabled: Boolean) {
         callNotificationsEnabled = enabled
         prefs.edit().putBoolean(KEY_CALL_NOTIF, enabled).apply()
+        MothBackgroundSync.syncState(appContext)
     }
 
     fun setNotificationPreviews(enabled: Boolean) {
@@ -347,6 +398,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
 
     fun setAppForeground(inForeground: Boolean) {
         volatileIsAppInForeground = inForeground
+        globalIsForeground = inForeground
         isAppInForeground = inForeground
         val user = currentUsername
         val now = System.currentTimeMillis()
@@ -359,6 +411,11 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                 if (now - lastPausedAtMs > 2500L) {
                     isAppLocked = true
                 }
+            }
+            val openChat = volatileActiveChatId ?: activeChatId
+            val openPeer = globalOpenChatPeer
+            if (!openChat.isNullOrBlank() || !openPeer.isNullOrBlank()) {
+                cancelNotificationForTarget(openChat.orEmpty(), openPeer.orEmpty())
             }
             if (user.isNotBlank()) {
                 refreshMyScreentimeAndPublish()
@@ -775,19 +832,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         prefs.edit().putString(KEY_LOGGED_IN_USER, username).apply()
     }
 
-    fun signOut() {
-        val oldUser = currentUsername
-        if (oldUser.isNotBlank()) {
-            publishMyPresence(oldUser, false)
-            activeChatId?.let { updateMyTypingStatus(it, false) }
-        }
-        voiceRecorder.cancelRecording()
-        voicePlayer.stop()
-        if (activeCall != null) {
-            declineOrEndCall()
-        }
-
-        prefs.edit().remove(KEY_LOGGED_IN_USER).apply()
+    private fun stopAllStreamsAndJobs() {
         localChatsJob?.cancel(); localChatsJob = null
         localMessagesJob?.cancel(); localMessagesJob = null
         localStarredJob?.cancel(); localStarredJob = null
@@ -814,6 +859,39 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         screentimeStatsListeners.clear()
         listPresenceListeners.values.forEach { it.remove() }
         listPresenceListeners.clear()
+    }
+
+    fun dispose() {
+        if (isDisposed) return
+        isDisposed = true
+        stopAllStreamsAndJobs()
+        if (globalActiveInstanceId == instanceToken) {
+            globalActiveInstanceId = null
+            globalOpenChatId = null
+            globalOpenChatPeer = null
+            globalIsForeground = false
+        }
+        ioScope.cancel()
+        if (startLiveStreams && currentUsername.isNotBlank()) {
+            MothBackgroundSync.onUiDetached(appContext)
+        }
+    }
+
+    fun signOut() {
+        val oldUser = currentUsername
+        if (oldUser.isNotBlank()) {
+            publishMyPresence(oldUser, false)
+            activeChatId?.let { updateMyTypingStatus(it, false) }
+        }
+        voiceRecorder.cancelRecording()
+        voicePlayer.stop()
+        if (activeCall != null) {
+            declineOrEndCall()
+        }
+
+        prefs.edit().remove(KEY_LOGGED_IN_USER).apply()
+        MothBackgroundSync.syncState(appContext)
+        stopAllStreamsAndJobs()
         contactPresenceSnapshots.clear()
         contactOnlineMap.clear()
 
@@ -824,6 +902,8 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         userAvatarPath = null
         userBio = ""
         volatileActiveChatId = null
+        globalOpenChatId = null
+        globalOpenChatPeer = null
         activeChatId = null
         isAppLocked = false
         conversations = emptyList()
@@ -843,6 +923,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
 
     private fun startSessionStreams(username: String) {
         if (username.isBlank()) return
+        MothBackgroundSync.onUiAttached(appContext)
 
         // Initialize E2EE keypair & publish public key to Firestore
         val myPubKey = crypto.initializeForUser(username)
@@ -1155,6 +1236,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                                 offerSdp = offerSdp,
                             )
                             if (!isAppInForeground) {
+                                MothBackgroundSync.markCallNotified(appContext, callId)
                                 showIncomingCallNotification(caller, callType)
                             }
                         }
@@ -1183,16 +1265,17 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
             .whereEqualTo("recipientUsername", username)
             .addSnapshotListener { snapshot, error ->
                 if (error != null || snapshot == null) return@addSnapshotListener
+                if (globalActiveInstanceId != instanceToken || currentUsername != username) return@addSnapshotListener
                 for (doc in snapshot.documents) {
                     val docId = doc.id
-                    if (!processingRelayIds.add(docId)) continue
+                    if (!globalProcessingRelayIds.add(docId)) continue
                     ioScope.launch {
                         try {
-                            handleIncomingRelayDoc(username, doc)
+                            handleIncomingRelayDoc(username, doc, allowHeadless = false)
                             doc.reference.delete().await()
                         } catch (_: Exception) {
                         } finally {
-                            processingRelayIds.remove(docId)
+                            globalProcessingRelayIds.remove(docId)
                         }
                     }
                 }
@@ -1201,10 +1284,17 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         startScreentimeListeners(username)
     }
 
-    private suspend fun handleIncomingRelayDoc(username: String, doc: DocumentSnapshot) {
+    private suspend fun handleIncomingRelayDoc(
+        username: String,
+        doc: DocumentSnapshot,
+        allowHeadless: Boolean = false,
+    ) {
+        if (currentUsername != username) return
+        if (!allowHeadless && globalActiveInstanceId != instanceToken) return
+        if (allowHeadless && globalActiveInstanceId != null) return
         val recipient = doc.getString("recipientUsername")?.trim()?.lowercase().orEmpty()
         val sender = doc.getString("senderUsername")?.trim()?.lowercase().orEmpty()
-        if (recipient != username || sender.isBlank()) return
+        if (recipient != username || sender.isBlank() || sender.equals(username, ignoreCase = true)) return
 
         // Cache sender public key if included
         val senderPubKey = doc.getString("senderPublicKey")
@@ -1316,7 +1406,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                 val ts = doc.getLong("timestamp") ?: System.currentTimeMillis()
                 val existingCallMsg = mothDao.getMessage(localMsgIdFor(username, "call_$callId"))
                 if (existingCallMsg == null) {
-                    recordCallLog(
+                    recordCallLogAwait(
                         peer = sender,
                         callType = callType,
                         direction = CallDirection.MISSED,
@@ -1326,7 +1416,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                     )
                     val chatId = chatIdFor(username, sender)
                     if (!isChatCurrentlyOpen(chatId, sender) && callNotificationsEnabled) {
-                        showIncomingMessageNotification(
+                        showIncomingMessageNotificationAwait(
                             title = sender,
                             body = "missed voice call",
                             openTarget = sender,
@@ -1451,7 +1541,11 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
             syncChatToCloud(updatedChat)
 
             if (groupId == null && existingChat?.avatarLocalPath == null) {
-                syncContactAvatarInBackground(username, sender, chatId)
+                if (allowHeadless) {
+                    syncContactAvatarAwait(username, sender, chatId)
+                } else {
+                    syncContactAvatarInBackground(username, sender, chatId)
+                }
             }
 
             // Send DELIVERED receipt (or READ if currently open & read receipts enabled)
@@ -1474,7 +1568,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                 } else {
                     "new encrypted whisper"
                 }
-                showIncomingMessageNotification(
+                showIncomingMessageNotificationAwait(
                     title = notifTitle,
                     body = notifText,
                     openTarget = groupId ?: sender,
@@ -1587,43 +1681,69 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
 
     private fun syncContactAvatarInBackground(ownerUsername: String, otherUsername: String, chatId: String) {
         ioScope.launch {
-            try {
-                val userDoc = db.collection("users").document(otherUsername).get().await()
-                if (!userDoc.exists()) return@launch
-                userDoc.getString("e2eePublicKey")?.let { crypto.cachePeerPublicKey(otherUsername, it) }
-                val base64 = userDoc.getString("avatarBase64")
-                val colorLong = userDoc.getLong("avatarColorArgb")
-                val existingChat = mothDao.getChat(chatId) ?: return@launch
+            syncContactAvatarAwait(ownerUsername, otherUsername, chatId)
+        }
+    }
 
-                val contactFile = File(mediaDir, "contact_avatar_${otherUsername}.jpg")
-                val newAvatarPath = if (!base64.isNullOrBlank()) {
-                    contactFile.writeBytes(Base64.decode(base64, Base64.NO_WRAP))
-                    contactFile.absolutePath
-                } else {
-                    if (contactFile.exists()) contactFile.delete()
-                    null
-                }
+    private suspend fun syncContactAvatarAwait(ownerUsername: String, otherUsername: String, chatId: String) {
+        try {
+            val userDoc = db.collection("users").document(otherUsername).get().await()
+            if (!userDoc.exists()) return
+            userDoc.getString("e2eePublicKey")?.let { crypto.cachePeerPublicKey(otherUsername, it) }
+            val base64 = userDoc.getString("avatarBase64")
+            val colorLong = userDoc.getLong("avatarColorArgb")
+            val existingChat = mothDao.getChat(chatId) ?: return
 
-                val newColor = colorLong ?: existingChat.avatarColorArgb
-                if (newAvatarPath != existingChat.avatarLocalPath || newColor != existingChat.avatarColorArgb) {
-                    mothDao.upsertChat(
-                        existingChat.copy(avatarLocalPath = newAvatarPath, avatarColorArgb = newColor)
-                    )
-                }
-            } catch (_: Exception) {}
+            val contactFile = File(mediaDir, "contact_avatar_${otherUsername}.jpg")
+            val newAvatarPath = if (!base64.isNullOrBlank()) {
+                contactFile.writeBytes(Base64.decode(base64, Base64.NO_WRAP))
+                contactFile.absolutePath
+            } else {
+                if (contactFile.exists()) contactFile.delete()
+                null
+            }
+
+            val newColor = colorLong ?: existingChat.avatarColorArgb
+            if (newAvatarPath != existingChat.avatarLocalPath || newColor != existingChat.avatarColorArgb) {
+                mothDao.upsertChat(
+                    existingChat.copy(avatarLocalPath = newAvatarPath, avatarColorArgb = newColor)
+                )
+            }
+        } catch (_: Exception) {}
+    }
+
+    fun markChatScreenVisible(chatId: String, peerOrGroup: String) {
+        val cleanPeer = peerOrGroup.trim().removePrefix("@").lowercase()
+        volatileActiveChatId = chatId
+        globalOpenChatId = chatId
+        if (cleanPeer.isNotBlank()) {
+            globalOpenChatPeer = cleanPeer
+        }
+        cancelNotificationForTarget(chatId, cleanPeer)
+    }
+
+    fun clearChatScreenVisible(chatId: String) {
+        if (globalOpenChatId.equals(chatId, ignoreCase = true)) {
+            globalOpenChatId = null
+            globalOpenChatPeer = null
         }
     }
 
     private fun isChatCurrentlyOpen(chatId: String, targetOrSender: String): Boolean {
-        if (!volatileIsAppInForeground && !isAppInForeground) return false
-        val openId = volatileActiveChatId ?: activeChatId ?: return false
-        if (openId.equals(chatId, ignoreCase = true)) return true
-        val cleanTarget = targetOrSender.trim().removePrefix("@").lowercase()
-        if (cleanTarget.isBlank()) return false
-        val openAfter = openId.substringAfter("::", openId).lowercase()
-        if (openAfter == cleanTarget) return true
-        val openConvName = conversations.firstOrNull { it.id.equals(openId, ignoreCase = true) }?.name?.lowercase()
-        return openConvName != null && openConvName == cleanTarget
+        if (!volatileIsAppInForeground && !isAppInForeground && !globalIsForeground) return false
+        if (!isAppInForeground && !globalIsForeground) return false
+        val openId = volatileActiveChatId ?: activeChatId ?: globalOpenChatId
+        if (!openId.isNullOrBlank()) {
+            if (openId.equals(chatId, ignoreCase = true)) return true
+            val cleanTarget = targetOrSender.trim().removePrefix("@").lowercase()
+            if (cleanTarget.isNotBlank()) {
+                val openAfter = openId.substringAfter("::", openId).removePrefix("@").lowercase()
+                if (openAfter == cleanTarget) return true
+                val openConvName = conversations.firstOrNull { it.id.equals(openId, ignoreCase = true) }?.name?.lowercase()
+                if (openConvName != null && openConvName == cleanTarget) return true
+            }
+        }
+        return isChatCurrentlyOpenProcessWide(chatId, targetOrSender, targetOrSender)
     }
 
     private fun cancelNotificationForTarget(vararg targets: String) {
@@ -1635,7 +1755,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         }
     }
 
-    private fun showIncomingMessageNotification(
+    private suspend fun showIncomingMessageNotificationAwait(
         title: String,
         body: String,
         openTarget: String,
@@ -1661,46 +1781,50 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
 
         val notifId = (chatId.ifBlank { openTarget }).hashCode()
         if (isCall) {
-            val intent = Intent(appContext, MainActivity::class.java).apply {
-                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-                putExtra("open_chat_user", openTarget)
-            }
-            val pendingIntent = PendingIntent.getActivity(
-                appContext,
-                notifId,
-                intent,
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
-            )
-            val peerBitmap = buildNotificationAvatarBitmap(appContext, senderHandle)
-            val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
-            val builder = NotificationCompat.Builder(appContext, NOTIF_CHANNEL_ID)
-                .setSmallIcon(R.drawable.ic_moth_notification)
-                .setColor(0xFFFFB43B.toInt())
-                .setLargeIcon(peerBitmap)
-                .setContentTitle(title)
-                .setContentText(body)
-                .setPriority(NotificationCompat.PRIORITY_HIGH)
-                .setCategory(NotificationCompat.CATEGORY_CALL)
-                .setSound(soundUri)
-                .setDefaults(NotificationCompat.DEFAULT_SOUND or NotificationCompat.DEFAULT_VIBRATE)
-                .setAutoCancel(true)
-                .setContentIntent(pendingIntent)
-            nm.notify(notifId, builder.build())
+            postIncomingCallNotificationInternal(appContext, senderHandle, body, openTarget, notifId)
             return
         }
 
         if (chatId.isBlank()) return
-        val owner = currentUsername
+        postConversationNotification(
+            context = appContext,
+            ownerUsername = currentUsername,
+            chatId = chatId,
+            openTarget = openTarget,
+            senderTitle = title,
+            senderHandle = senderHandle,
+            fallbackBody = body,
+            alertOnce = false,
+        )
+    }
+
+    private fun showIncomingMessageNotification(
+        title: String,
+        body: String,
+        openTarget: String,
+        chatId: String = "",
+        isCall: Boolean = false,
+        senderHandle: String = openTarget,
+    ) {
+        if (isCall && !callNotificationsEnabled) return
+        if (!isCall && !messageNotificationsEnabled) return
+        if (!isCall && isChatCurrentlyOpen(chatId, senderHandle)) {
+            cancelNotificationForTarget(chatId, openTarget, senderHandle)
+            return
+        }
+        if (isCall) {
+            val notifId = (chatId.ifBlank { openTarget }).hashCode()
+            postIncomingCallNotificationInternal(appContext, senderHandle, body, openTarget, notifId)
+            return
+        }
         ioScope.launch {
-            postConversationNotification(
-                context = appContext,
-                ownerUsername = owner,
-                chatId = chatId,
+            showIncomingMessageNotificationAwait(
+                title = title,
+                body = body,
                 openTarget = openTarget,
-                senderTitle = title,
+                chatId = chatId,
+                isCall = false,
                 senderHandle = senderHandle,
-                fallbackBody = body,
-                alertOnce = false,
             )
         }
     }
@@ -1968,6 +2092,8 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         val chatId = target?.id ?: chatIdFor(owner, otherUser)
 
         volatileActiveChatId = chatId
+        globalOpenChatId = chatId
+        globalOpenChatPeer = otherUser
         activeChatId = chatId
         isContactTyping = false
         lastTypingSentAt = 0L
@@ -2044,6 +2170,10 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         voiceRecorder.cancelRecording()
         voicePlayer.stop()
         volatileActiveChatId = null
+        if (oldChatId != null && globalOpenChatId.equals(oldChatId, ignoreCase = true)) {
+            globalOpenChatId = null
+            globalOpenChatPeer = null
+        }
         activeChatId = null
         localMessagesJob?.cancel(); localMessagesJob = null
         typingTimeoutJob?.cancel(); typingTimeoutJob = null
@@ -4166,6 +4296,19 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         callId: String? = null,
         customTimestamp: Long = System.currentTimeMillis(),
     ) {
+        ioScope.launch {
+            recordCallLogAwait(peer, callType, direction, durationSec, callId, customTimestamp)
+        }
+    }
+
+    private suspend fun recordCallLogAwait(
+        peer: String,
+        callType: CallType,
+        direction: CallDirection,
+        durationSec: Int,
+        callId: String? = null,
+        customTimestamp: Long = System.currentTimeMillis(),
+    ) {
         val owner = currentUsername
         val cleanPeer = peer.trim().removePrefix("@").lowercase()
         if (owner.isBlank() || cleanPeer.isBlank()) return
@@ -4175,71 +4318,69 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         val localMsgId = localMsgIdFor(owner, msgId)
         val chatId = chatIdFor(owner, cleanPeer)
 
-        ioScope.launch {
-            val logId = if (!callId.isNullOrBlank()) "clog_${owner}_$callId" else "clog_${now}_${UUID.randomUUID().toString().take(4)}"
-            mothDao.upsertCallLog(
-                MothCallLogEntity(
-                    id = logId,
+        val logId = if (!callId.isNullOrBlank()) "clog_${owner}_$callId" else "clog_${now}_${UUID.randomUUID().toString().take(4)}"
+        mothDao.upsertCallLog(
+            MothCallLogEntity(
+                id = logId,
+                ownerUsername = owner,
+                peerUsername = cleanPeer,
+                callType = callType.name,
+                direction = direction.name,
+                durationSec = durationSec,
+                timestamp = now,
+                timeLabel = timeLabel,
+            )
+        )
+
+        if (mothDao.getMessage(localMsgId) == null) {
+            val preview = when (direction) {
+                CallDirection.MISSED -> "missed voice call"
+                CallDirection.INCOMING -> "incoming voice call"
+                CallDirection.OUTGOING -> "outgoing voice call"
+            }
+            mothDao.upsertMessage(
+                MothMessageEntity(
+                    localId = localMsgId,
+                    id = msgId,
                     ownerUsername = owner,
-                    peerUsername = cleanPeer,
-                    callType = callType.name,
-                    direction = direction.name,
-                    durationSec = durationSec,
+                    chatId = chatId,
+                    senderUsername = if (direction == CallDirection.OUTGOING) owner else cleanPeer,
+                    text = "",
+                    type = MessageType.REGULAR.name,
+                    time = timeLabel,
                     timestamp = now,
-                    timeLabel = timeLabel,
+                    attachmentType = AttachmentType.CALL.name,
+                    attachmentName = direction.name,
+                    audioDurationSec = durationSec,
+                    status = MessageStatus.READ.name,
+                    sentAt = now,
+                    deliveredAt = now,
+                    readAt = now,
                 )
             )
 
-            if (mothDao.getMessage(localMsgId) == null) {
-                val preview = when (direction) {
-                    CallDirection.MISSED -> "missed voice call"
-                    CallDirection.INCOMING -> "incoming voice call"
-                    CallDirection.OUTGOING -> "outgoing voice call"
-                }
-                mothDao.upsertMessage(
-                    MothMessageEntity(
-                        localId = localMsgId,
-                        id = msgId,
-                        ownerUsername = owner,
-                        chatId = chatId,
-                        senderUsername = if (direction == CallDirection.OUTGOING) owner else cleanPeer,
-                        text = "",
-                        type = MessageType.REGULAR.name,
-                        time = timeLabel,
-                        timestamp = now,
-                        attachmentType = AttachmentType.CALL.name,
-                        attachmentName = direction.name,
-                        audioDurationSec = durationSec,
-                        status = MessageStatus.READ.name,
-                        sentAt = now,
-                        deliveredAt = now,
-                        readAt = now,
-                    )
-                )
-
-                val existingChat = mothDao.getChat(chatId)
-                val isCurrentlyOpen = isChatCurrentlyOpen(chatId, cleanPeer)
-                val unreadIncrement = if (direction == CallDirection.MISSED && !isCurrentlyOpen) 1 else 0
-                val updatedChat = (existingChat ?: MothChatEntity(
-                    id = chatId,
-                    ownerUsername = owner,
-                    otherUsername = cleanPeer,
-                    preview = preview,
-                    time = timeLabel,
-                    avatarColorArgb = avatarColorForUsername(cleanPeer).toArgb().toLong(),
-                    unreadCount = unreadIncrement,
-                    isLit = true,
-                    updatedAt = now,
-                )).copy(
-                    preview = preview,
-                    time = timeLabel,
-                    unreadCount = if (isCurrentlyOpen) 0 else (existingChat?.unreadCount ?: 0) + unreadIncrement,
-                    isLit = true,
-                    updatedAt = now,
-                )
-                mothDao.upsertChat(updatedChat)
-                syncChatToCloud(updatedChat)
-            }
+            val existingChat = mothDao.getChat(chatId)
+            val isCurrentlyOpen = isChatCurrentlyOpen(chatId, cleanPeer)
+            val unreadIncrement = if (direction == CallDirection.MISSED && !isCurrentlyOpen) 1 else 0
+            val updatedChat = (existingChat ?: MothChatEntity(
+                id = chatId,
+                ownerUsername = owner,
+                otherUsername = cleanPeer,
+                preview = preview,
+                time = timeLabel,
+                avatarColorArgb = avatarColorForUsername(cleanPeer).toArgb().toLong(),
+                unreadCount = unreadIncrement,
+                isLit = true,
+                updatedAt = now,
+            )).copy(
+                preview = preview,
+                time = timeLabel,
+                unreadCount = if (isCurrentlyOpen) 0 else (existingChat?.unreadCount ?: 0) + unreadIncrement,
+                isLit = true,
+                updatedAt = now,
+            )
+            mothDao.upsertChat(updatedChat)
+            syncChatToCloud(updatedChat)
         }
     }
 
@@ -4855,7 +4996,7 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         attachmentName: String?,
     ): String {
         if (type == MessageType.VIEW_ONCE) return "sent a view-once message"
-        if (type == MessageType.DISAPPEARING) return "sent a burning message"
+        if (type == MessageType.DISAPPEARING) return if (activeAppTheme == AppThemeOption.FLOWER_BLOOM) "petals falling • ephemeral message" else "sent a burning message"
         if (attachmentType == AttachmentType.STICKER.name) return "sent a sticker"
         if (attachmentType == AttachmentType.VOICE.name) return "sent a voice note"
         if (attachmentType == AttachmentType.CALL.name) return if (attachmentName == CallDirection.MISSED.name) "missed voice call" else "voice call"
@@ -4922,8 +5063,157 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
     companion object {
         @Volatile
         private var activeInstanceRef: WeakReference<MothState>? = null
+        @Volatile
+        private var globalActiveInstanceId: String? = null
+        @Volatile
+        private var globalOpenChatId: String? = null
+        @Volatile
+        private var globalOpenChatPeer: String? = null
+        @Volatile
+        private var globalIsForeground: Boolean = true
+        private val globalProcessingRelayIds = ConcurrentHashMap.newKeySet<String>()
 
         fun getActiveInstance(): MothState? = activeInstanceRef?.get()
+
+        fun hasActiveUiInstanceFor(username: String): Boolean {
+            val active = activeInstanceRef?.get() ?: return false
+            return !active.isDisposed &&
+                globalActiveInstanceId == active.instanceToken &&
+                active.currentUsername.equals(username, ignoreCase = true)
+        }
+
+        fun disposeActiveUiIfPresent() {
+            activeInstanceRef?.get()?.dispose()
+        }
+
+        suspend fun processIncomingRelayBatchAwait(context: Context, docs: List<DocumentSnapshot>) {
+            if (docs.isEmpty()) return
+            val appCtx = context.applicationContext
+            val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            val savedUser = prefs.getString(KEY_LOGGED_IN_USER, "")?.trim()?.lowercase().orEmpty()
+            if (savedUser.isBlank()) return
+
+            val active = getActiveInstance()
+            if (active != null && !active.isDisposed &&
+                globalActiveInstanceId == active.instanceToken &&
+                active.currentUsername == savedUser
+            ) {
+                for (doc in docs) {
+                    val docId = doc.id
+                    if (!globalProcessingRelayIds.add(docId)) continue
+                    try {
+                        active.handleIncomingRelayDoc(savedUser, doc, allowHeadless = false)
+                        doc.reference.delete().await()
+                    } catch (_: Exception) {
+                    } finally {
+                        globalProcessingRelayIds.remove(docId)
+                    }
+                }
+                return
+            }
+
+            val tempScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            val tempState = MothState(appCtx, tempScope, startLiveStreams = false)
+            try {
+                if (tempState.currentUsername != savedUser) return
+                for (doc in docs) {
+                    val docId = doc.id
+                    if (!globalProcessingRelayIds.add(docId)) continue
+                    try {
+                        tempState.handleIncomingRelayDoc(savedUser, doc, allowHeadless = true)
+                        doc.reference.delete().await()
+                    } catch (_: Exception) {
+                    } finally {
+                        globalProcessingRelayIds.remove(docId)
+                    }
+                }
+            } finally {
+                tempState.dispose()
+                tempScope.cancel()
+            }
+        }
+
+        private fun postIncomingCallNotificationInternal(
+            context: Context,
+            senderHandle: String,
+            body: String,
+            openTarget: String,
+            notifId: Int,
+        ) {
+            val appCtx = context.applicationContext
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+                val granted = ContextCompat.checkSelfPermission(
+                    appCtx,
+                    Manifest.permission.POST_NOTIFICATIONS
+                ) == PackageManager.PERMISSION_GRANTED
+                if (!granted) return
+            }
+            val nm = appCtx.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            ensureFarlightNotificationChannel(nm)
+
+            val intent = Intent(appCtx, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
+                putExtra("open_chat_user", openTarget)
+            }
+            val pendingIntent = PendingIntent.getActivity(
+                appCtx,
+                notifId,
+                intent,
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+            )
+            val peerBitmap = buildNotificationAvatarBitmap(appCtx, senderHandle)
+            val soundUri = RingtoneManager.getDefaultUri(RingtoneManager.TYPE_NOTIFICATION)
+            val builder = NotificationCompat.Builder(appCtx, NOTIF_CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_moth_notification)
+                .setColor(0xFFFFB43B.toInt())
+                .setLargeIcon(peerBitmap)
+                .setContentTitle("@${senderHandle.trim().removePrefix("@")}")
+                .setContentText(body)
+                .setPriority(NotificationCompat.PRIORITY_HIGH)
+                .setCategory(NotificationCompat.CATEGORY_CALL)
+                .setSound(soundUri)
+                .setDefaults(NotificationCompat.DEFAULT_SOUND or NotificationCompat.DEFAULT_VIBRATE)
+                .setAutoCancel(true)
+                .setContentIntent(pendingIntent)
+            nm.notify(notifId, builder.build())
+        }
+
+        fun postIncomingCallNotification(context: Context, caller: String, callType: CallType) {
+            val clean = caller.trim().removePrefix("@").lowercase()
+            if (clean.isBlank()) return
+            postIncomingCallNotificationInternal(
+                context = context.applicationContext,
+                senderHandle = clean,
+                body = "incoming voice call",
+                openTarget = clean,
+                notifId = clean.hashCode(),
+            )
+        }
+
+        fun cancelNotificationForHandle(context: Context, target: String) {
+            if (target.isBlank()) return
+            val nm = context.applicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+            nm.cancel(target.hashCode())
+        }
+
+        fun isChatCurrentlyOpenProcessWide(chatId: String, senderHandle: String, openTarget: String): Boolean {
+            if (!globalIsForeground) return false
+            val openId = globalOpenChatId
+            val openPeer = globalOpenChatPeer
+            val cleanSender = senderHandle.trim().removePrefix("@").lowercase()
+            val cleanTarget = openTarget.trim().removePrefix("@").lowercase()
+            if (!openId.isNullOrBlank()) {
+                if (chatId.isNotBlank() && openId.equals(chatId, ignoreCase = true)) return true
+                val openAfter = openId.substringAfter("::", openId).removePrefix("@").lowercase()
+                if (cleanSender.isNotBlank() && openAfter == cleanSender) return true
+                if (cleanTarget.isNotBlank() && openAfter == cleanTarget) return true
+            }
+            if (!openPeer.isNullOrBlank()) {
+                if (cleanSender.isNotBlank() && openPeer == cleanSender) return true
+                if (cleanTarget.isNotBlank() && openPeer == cleanTarget) return true
+            }
+            return false
+        }
 
         suspend fun sendDirectReplyAwait(context: Context, chatId: String, replyText: String): String {
             val active = getActiveInstance()
@@ -4936,8 +5226,13 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
             val savedUser = prefs.getString(KEY_LOGGED_IN_USER, "")?.trim()?.lowercase().orEmpty()
             if (savedUser.isBlank()) return ""
             val tempScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
-            val tempState = MothState(appCtx, tempScope)
-            tempState.sendReplyFromNotificationAwait(chatId, replyText)
+            val tempState = MothState(appCtx, tempScope, startLiveStreams = false)
+            try {
+                tempState.sendReplyFromNotificationAwait(chatId, replyText)
+            } finally {
+                tempState.dispose()
+                tempScope.cancel()
+            }
             return savedUser
         }
 
@@ -5177,6 +5472,13 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
                 builder.setDefaults(NotificationCompat.DEFAULT_SOUND or NotificationCompat.DEFAULT_VIBRATE)
             }
 
+            if (!alertOnce && isChatCurrentlyOpenProcessWide(chatId, senderHandle, openTarget)) {
+                listOf(chatId, openTarget, senderHandle).filter { it.isNotBlank() }.forEach {
+                    nm.cancel(it.hashCode())
+                }
+                return
+            }
+
             nm.notify(notifId, builder.build())
         }
 
@@ -5219,6 +5521,8 @@ class MothState(private val context: Context, private val scope: CoroutineScope)
         private const val KEY_HIDE_TYPING = "pref_hide_typing"
         private const val KEY_DISABLE_READ_RECEIPTS = "pref_disable_read_receipts"
         private const val KEY_FONT_SCALE = "pref_font_scale"
+        private const val KEY_APP_FONT = "pref_app_font"
+        private const val KEY_APP_THEME = "pref_app_theme"
         private const val KEY_APP_LOCK_ENABLED = "pref_app_lock_enabled"
         private const val KEY_APP_LOCK_PIN_HASH = "pref_app_lock_pin_hash"
         private const val KEY_MSG_NOTIF = "pref_msg_notifications"

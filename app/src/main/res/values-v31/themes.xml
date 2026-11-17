@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <style name="Theme.MothHours" parent="android:Theme.Material.NoActionBar">
+        <item name="android:windowBackground">@color/moth_bg_dark</item>
+        <item name="android:colorBackground">@color/moth_bg_dark</item>
+        <item name="android:statusBarColor">@color/moth_bg_dark</item>
+        <item name="android:navigationBarColor">@color/moth_bg_dark</item>
+        <item name="android:windowSplashScreenBackground">@color/moth_bg_dark</item>
+        <item name="android:windowSplashScreenAnimatedIcon">@drawable/splash_empty_icon</item>
+        <item name="android:windowSplashScreenAnimationDuration">0</item>
+    </style>
+</resources>

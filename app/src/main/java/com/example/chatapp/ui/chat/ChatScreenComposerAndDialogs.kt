@@ -22,6 +22,8 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.SolidColor
@@ -418,6 +420,7 @@ internal fun ChatVoiceFilterPickerBar(
 internal fun ChatInputBar(
     voiceRecorder: VoiceNoteRecorder,
     draft: String,
+    inputFocusRequester: FocusRequester,
     hasPendingAttachment: Boolean,
     pendingViewOnce: Boolean,
     showAttachMenu: Boolean,
@@ -594,6 +597,7 @@ internal fun ChatInputBar(
                                 },
                                 modifier = Modifier
                                     .fillMaxWidth()
+                                    .focusRequester(inputFocusRequester)
                                     .testTag("message_input_field"),
                             )
                         }

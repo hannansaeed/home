@@ -38,6 +38,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.FilterQuality
 import androidx.compose.ui.graphics.SolidColor
@@ -46,6 +47,7 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.SpanStyle
@@ -129,6 +131,20 @@ fun ChatScreen(
     // Reply, Edit, Forward, Actions, Info, Delete, Search, Profile modals
     var replyingToMessage by remember { mutableStateOf<MothMessage?>(null) }
     var editingMessage by remember { mutableStateOf<MothMessage?>(null) }
+    val inputFocusRequester = remember { FocusRequester() }
+    val keyboardController = LocalSoftwareKeyboardController.current
+    LaunchedEffect(replyingToMessage) {
+        if (replyingToMessage != null) {
+            showAttachMenu = false
+            showStickerTray = false
+            showVoiceFilterMenu = false
+            delay(50L)
+            runCatching {
+                inputFocusRequester.requestFocus()
+                keyboardController?.show()
+            }
+        }
+    }
     var selectedMessageIds by remember { mutableStateOf<Set<String>>(emptySet()) }
     var showEditReactionsDialog by remember { mutableStateOf(false) }
     var infoModalMessage by remember { mutableStateOf<MothMessage?>(null) }
@@ -650,7 +666,9 @@ fun ChatScreen(
             state.activeChatTodSession?.let { tod ->
                 ChatTodBotCard(
                     tod = tod,
+                    currentUsername = state.currentUsername,
                     onPlayTurn = { mode -> state.playTodTurn(activeChatId, mode) },
+                    onSkipPrompt = { state.skipTodPrompt(activeChatId) },
                     onAdvanceTurn = { state.advanceTodTurn(activeChatId) },
                     onRemove = { state.removeTodBotFromChat(activeChatId) },
                 )
@@ -881,6 +899,7 @@ fun ChatScreen(
             ChatInputBar(
                 voiceRecorder = state.voiceRecorder,
                 draft = draft,
+                inputFocusRequester = inputFocusRequester,
                 hasPendingAttachment = pendingAttachment != null,
                 pendingViewOnce = pendingViewOnce,
                 showAttachMenu = showAttachMenu,
@@ -1019,7 +1038,7 @@ fun ChatScreen(
                 onDismiss = { showPixelStickerMaker = false },
                 onSave = { label, grid ->
                     coroutineScope.launch {
-                        val res = state.createPixelSticker(label, grid, 10)
+                        val res = state.createPixelSticker(label, grid, 12)
                         res.onSuccess { showPixelStickerMaker = false }
                             .onFailure { attachmentError = it.localizedMessage ?: "failed to save sticker" }
                     }
@@ -1168,8 +1187,8 @@ internal fun SwipeToReplyContainer(
                                 triggered = false
                             },
                             onHorizontalDrag = { _, delta ->
-                                dragX = (dragX + delta).coerceIn(-120f, 120f)
-                                if (!triggered && kotlin.math.abs(dragX) > 75f) {
+                                dragX = (dragX + delta).coerceIn(0f, 120f)
+                                if (!triggered && dragX > 75f) {
                                     triggered = true
                                     onSwipedToReply()
                                 }
@@ -1259,14 +1278,29 @@ internal fun PixelStickerMakerDialog(
     onDismiss: () -> Unit,
     onSave: (String, List<Int>) -> Unit,
 ) {
-    val gridSize = 10
+    val gridSize = 12
     val cells = remember { mutableStateListOf<Int>().apply { repeat(gridSize * gridSize) { add(0) } } }
     var selectedColor by remember { mutableIntStateOf(LanternAmber.toArgb()) }
     var label by remember { mutableStateOf("") }
+    var showClearConfirm by remember { mutableStateOf(false) }
 
     val palette = listOf(
-        LanternAmber, LanternGlow, WaxSealRed, SecureGreen,
-        TheirBubbleText, TheirBubbleBorder, Color(0xFF70D6FF), MothInkDark,
+        LanternAmber,
+        LanternGlow,
+        Color(0xFFFFD152),
+        Color(0xFFF38D71),
+        WaxSealRed,
+        Color(0xFFF482AA),
+        Color(0xFFB8A9E8),
+        Color(0xFF70D6FF),
+        Color(0xFF4B7BEC),
+        SecureGreen,
+        Color(0xFF72AC54),
+        Color(0xFF2D5624),
+        TheirBubbleText,
+        Color(0xFFFFFFFF),
+        Color(0xFF8C7A6B),
+        MothInkDark,
     )
 
     Box(
@@ -1320,72 +1354,122 @@ internal fun PixelStickerMakerDialog(
 
                 Column(
                     modifier = Modifier.background(MothBgDark).border(2.dp, MothDivider).padding(4.dp),
-                    verticalArrangement = Arrangement.spacedBy(2.dp),
+                    verticalArrangement = Arrangement.spacedBy(1.5.dp),
                 ) {
                     for (r in 0 until gridSize) {
-                        Row(horizontalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Row(horizontalArrangement = Arrangement.spacedBy(1.5.dp)) {
                             for (c in 0 until gridSize) {
                                 val idx = r * gridSize + c
                                 val cellArgb = cells[idx]
                                 Box(
                                     modifier = Modifier
-                                        .size(22.dp)
+                                        .size(19.dp)
                                         .background(if (cellArgb == 0) MothHeaderBg else Color(cellArgb))
-                                        .clickable { cells[idx] = if (cells[idx] == selectedColor) 0 else selectedColor },
+                                        .clickable {
+                                            showClearConfirm = false
+                                            cells[idx] = if (cells[idx] == selectedColor) 0 else selectedColor
+                                        },
                                 )
                             }
                         }
                     }
                 }
 
-                Row(
+                Column(
                     modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically,
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
                 ) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                        palette.forEach { color ->
-                            val argb = color.toArgb()
-                            val isSelected = selectedColor == argb
-                            Box(
-                                modifier = Modifier
-                                    .size(24.dp)
-                                    .background(color, SteppedCornerShape(2.dp))
-                                    .border(if (isSelected) 2.dp else 1.dp, if (isSelected) Color.White else MothDivider, SteppedCornerShape(2.dp))
-                                    .clickable { selectedColor = argb },
-                            )
+                    palette.chunked(8).forEach { rowColors ->
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceEvenly,
+                            verticalAlignment = Alignment.CenterVertically,
+                        ) {
+                            rowColors.forEach { color ->
+                                val argb = color.toArgb()
+                                val isSelected = selectedColor == argb
+                                Box(
+                                    modifier = Modifier
+                                        .size(26.dp)
+                                        .background(color, SteppedCornerShape(2.dp))
+                                        .border(if (isSelected) 2.dp else 1.dp, if (isSelected) Color.White else MothDivider, SteppedCornerShape(2.dp))
+                                        .clickable { selectedColor = argb },
+                                )
+                            }
                         }
                     }
-                    SteppedButton(
-                        text = "erase",
-                        onClick = { selectedColor = 0 },
-                        backgroundColor = if (selectedColor == 0) WaxSealRed else MothBgDark,
-                        borderColor = if (selectedColor == 0) WaxSealRed else MothDivider,
-                        textColor = if (selectedColor == 0) Color.White else MutedText,
-                        cutSize = 2.dp,
-                        borderWidth = 1.dp,
-                    )
                 }
 
-                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                    SteppedButton(
-                        text = "clear",
-                        onClick = { for (i in cells.indices) cells[i] = 0 },
-                        backgroundColor = TheirBubbleFill,
-                        borderColor = MothDivider,
-                        textColor = TheirBubbleText,
-                        modifier = Modifier.weight(1f),
+                if (showClearConfirm) {
+                    SteppedBox(
+                        modifier = Modifier.fillMaxWidth(),
+                        backgroundColor = MothBgDark,
+                        borderColor = WaxSealRed,
                         cutSize = 3.dp,
-                    )
-                    SteppedButton(
-                        text = "save sticker",
-                        onClick = { if (cells.any { it != 0 }) onSave(label, cells.toList()) },
-                        backgroundColor = MyBubbleFill,
-                        borderColor = MyBubbleBorder,
-                        textColor = MyBubbleText,
-                        modifier = Modifier.weight(1f),
-                        cutSize = 3.dp,
-                    )
+                        borderWidth = 1.dp,
+                    ) {
+                        Column(
+                            modifier = Modifier.fillMaxWidth().padding(10.dp),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                text = "clear entire 12x12 canvas?",
+                                fontFamily = PixelifySans,
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 12.sp,
+                                color = TheirBubbleText,
+                            )
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                            ) {
+                                SteppedButton(
+                                    text = "yes, clear",
+                                    onClick = {
+                                        for (i in cells.indices) cells[i] = 0
+                                        showClearConfirm = false
+                                    },
+                                    backgroundColor = WaxSealRed,
+                                    borderColor = WaxSealDarkEdge,
+                                    textColor = Color.White,
+                                    modifier = Modifier.weight(1f).testTag("confirm_clear_sticker_button"),
+                                    cutSize = 2.dp,
+                                )
+                                SteppedButton(
+                                    text = "cancel",
+                                    onClick = { showClearConfirm = false },
+                                    backgroundColor = TheirBubbleFill,
+                                    borderColor = MothDivider,
+                                    textColor = TheirBubbleText,
+                                    modifier = Modifier.weight(1f),
+                                    cutSize = 2.dp,
+                                )
+                            }
+                        }
+                    }
+                } else {
+                    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        SteppedButton(
+                            text = "clear",
+                            onClick = { showClearConfirm = true },
+                            backgroundColor = TheirBubbleFill,
+                            borderColor = MothDivider,
+                            textColor = TheirBubbleText,
+                            modifier = Modifier.weight(1f).testTag("clear_sticker_canvas_button"),
+                            cutSize = 3.dp,
+                        )
+                        SteppedButton(
+                            text = "save sticker",
+                            onClick = { if (cells.any { it != 0 }) onSave(label, cells.toList()) },
+                            backgroundColor = MyBubbleFill,
+                            borderColor = MyBubbleBorder,
+                            textColor = MyBubbleText,
+                            modifier = Modifier.weight(1f),
+                            cutSize = 3.dp,
+                        )
+                    }
                 }
             }
         }

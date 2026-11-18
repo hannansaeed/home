@@ -179,6 +179,7 @@ data class TodSessionState(
     val turnUsername: String = "",
     val roundNumber: Int = 1,
     val promptType: String = "",
+    val selectedMode: String = "",
     val promptText: String = "",
     val promptPickedBy: String = "",
     val lastActionText: String = "",

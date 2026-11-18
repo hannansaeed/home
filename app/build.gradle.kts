@@ -66,11 +66,12 @@ dependencies {
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.9.0")
 
-    // Firebase BoM, Firestore, Auth & Credential Manager
+    // Firebase BoM, Firestore, Auth, Messaging & Credential Manager
     val firebaseBom = platform("com.google.firebase:firebase-bom:33.7.0")
     implementation(firebaseBom)
     implementation("com.google.firebase:firebase-firestore")
     implementation("com.google.firebase:firebase-auth")
+    implementation("com.google.firebase:firebase-messaging")
     implementation("androidx.credentials:credentials:1.3.0")
     implementation("androidx.credentials:credentials-play-services-auth:1.3.0")
     implementation("com.google.android.libraries.identity.googleid:googleid:1.1.1")

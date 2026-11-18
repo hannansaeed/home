@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.Slider
+import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -26,23 +28,21 @@ import androidx.compose.ui.unit.sp
 import com.example.chatapp.ui.components.*
 import com.example.chatapp.ui.theme.*
 import kotlinx.coroutines.launch
+import kotlin.math.roundToInt
 
 private enum class SettingsCategory(
     val title: String,
     val subtitle: String,
 ) {
     PROFILE("profile", "username, passphrase, bio & avatar"),
-    APPEARANCE("appearance", "theme, lantern hue, font & size"),
+    APPEARANCE("appearance", "theme, font & size"),
     PRIVACY("privacy", "screenshots, typing, read receipts & pin"),
     NOTIFICATIONS("notifications", "message alerts, calls & previews"),
     DATA_STORAGE("data and storage", "media usage, cache & call logs"),
     CONTACTS("friends / contacts", "your saved handles & active status"),
     ;
 
-    fun localizedSubtitle(): String = when {
-        this == APPEARANCE && isBloomTheme -> "theme, flower hue, font & size"
-        else -> subtitle
-    }
+    fun localizedSubtitle(): String = subtitle
 }
 
 @Composable
@@ -777,34 +777,6 @@ fun MothProfileView(
 
                                 Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                     Text(
-                                        text = if (isBloomTheme) "flower hue" else "lantern hue",
-                                        fontFamily = PixelifySans,
-                                        fontWeight = FontWeight.Bold,
-                                        fontSize = 13.sp,
-                                        color = TheirBubbleText,
-                                    )
-                                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                                        avatarColors.forEach { color ->
-                                            val isSelected = state.userAvatarColor == color
-                                            Box(
-                                                modifier = Modifier
-                                                    .size(36.dp)
-                                                    .background(color, SteppedCornerShape(3.dp))
-                                                    .border(
-                                                        width = if (isSelected) 3.dp else 1.dp,
-                                                        color = if (isSelected) LanternAmber else MothBgDark,
-                                                        shape = SteppedCornerShape(3.dp),
-                                                    )
-                                                    .clickable { state.updateAvatarColor(color) },
-                                            )
-                                        }
-                                    }
-                                }
-
-                                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MothDivider))
-
-                                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                                    Text(
                                         text = "message font size",
                                         fontFamily = PixelifySans,
                                         fontWeight = FontWeight.Bold,
@@ -834,6 +806,27 @@ fun MothProfileView(
                                                 cutSize = 3.dp,
                                             )
                                         }
+                                    }
+
+                                    // Live preview bubble
+                                    SteppedBox(
+                                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                                        backgroundColor = MyBubbleFill,
+                                        borderColor = MyBubbleBorder,
+                                        cutSize = 4.dp,
+                                    ) {
+                                        Text(
+                                            text = if (isBloomTheme) {
+                                                "preview: spring petals bloom in warm sun."
+                                            } else {
+                                                "preview: moths gather around warm lanterns."
+                                            },
+                                            fontFamily = PixelifySans,
+                                            fontSize = (14f * state.messageFontScale).sp,
+                                            lineHeight = (19f * state.messageFontScale).sp,
+                                            color = MyBubbleText,
+                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                        )
                                     }
 
                                     Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MothDivider))
@@ -946,25 +939,90 @@ fun MothProfileView(
                                         }
                                     }
 
-                                    // Live preview bubble
-                                    SteppedBox(
-                                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-                                        backgroundColor = MyBubbleFill,
-                                        borderColor = MyBubbleBorder,
-                                        cutSize = 4.dp,
-                                    ) {
-                                        Text(
-                                            text = if (isBloomTheme) {
-                                                "preview: spring petals bloom in warm sun."
-                                            } else {
-                                                "preview: moths gather around warm lanterns."
+                                    Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(MothDivider))
+
+                                    Column(verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                            verticalAlignment = Alignment.CenterVertically,
+                                        ) {
+                                            Text(
+                                                text = "ui font size",
+                                                fontFamily = PixelifySans,
+                                                fontWeight = FontWeight.Bold,
+                                                fontSize = 13.sp,
+                                                color = TheirBubbleText,
+                                            )
+                                            Row(
+                                                verticalAlignment = Alignment.CenterVertically,
+                                                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                                            ) {
+                                                if (kotlin.math.abs(state.uiFontScale - 1.0f) >= 0.02f) {
+                                                    Text(
+                                                        text = "reset",
+                                                        fontFamily = PixelifySans,
+                                                        fontSize = 11.sp,
+                                                        color = LanternAmber,
+                                                        modifier = Modifier
+                                                            .clickable { state.updateUiFontScale(1.0f) }
+                                                            .padding(horizontal = 4.dp, vertical = 2.dp)
+                                                            .testTag("ui_font_size_reset"),
+                                                    )
+                                                }
+                                                Text(
+                                                    text = "${(state.uiFontScale * 100).roundToInt()}%",
+                                                    fontFamily = PixelifySans,
+                                                    fontWeight = FontWeight.Bold,
+                                                    fontSize = 12.sp,
+                                                    color = LanternAmber,
+                                                )
+                                            }
+                                        }
+
+                                        Slider(
+                                            value = state.uiFontScale,
+                                            onValueChange = { next ->
+                                                val snapped = ((next * 20f).roundToInt() / 20f).coerceIn(0.75f, 1.35f)
+                                                state.updateUiFontScale(snapped)
                                             },
-                                            fontFamily = PixelifySans,
-                                            fontSize = (14f * state.messageFontScale).sp,
-                                            lineHeight = (19f * state.messageFontScale).sp,
-                                            color = MyBubbleText,
-                                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                            valueRange = 0.75f..1.35f,
+                                            steps = 11,
+                                            colors = SliderDefaults.colors(
+                                                thumbColor = LanternAmber,
+                                                activeTrackColor = LanternAmber,
+                                                inactiveTrackColor = MothDivider,
+                                                activeTickColor = MothBgDark,
+                                                inactiveTickColor = MutedText,
+                                            ),
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .testTag("ui_font_size_slider"),
                                         )
+
+                                        Row(
+                                            modifier = Modifier.fillMaxWidth(),
+                                            horizontalArrangement = Arrangement.SpaceBetween,
+                                        ) {
+                                            Text(
+                                                text = "smaller",
+                                                fontFamily = PixelifySans,
+                                                fontSize = 10.sp,
+                                                color = MutedText,
+                                            )
+                                            Text(
+                                                text = "default",
+                                                fontFamily = PixelifySans,
+                                                fontSize = 10.sp,
+                                                color = MutedText,
+                                            )
+                                            Text(
+                                                text = "larger",
+                                                fontFamily = PixelifySans,
+                                                fontSize = 10.sp,
+                                                color = MutedText,
+                                            )
+                                        }
                                     }
                                 }
                             }

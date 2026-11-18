@@ -264,7 +264,19 @@ interface MothDao {
     @Query("UPDATE moth_messages SET isStarred = :starred WHERE localId = :localId")
     suspend fun updateMessageStarred(localId: String, starred: Boolean)
 
-    @Query("UPDATE moth_messages SET status = :status, sentAt = CASE WHEN :sentAt > 0 THEN :sentAt ELSE sentAt END, deliveredAt = CASE WHEN :deliveredAt > 0 THEN :deliveredAt ELSE deliveredAt END, readAt = CASE WHEN :readAt > 0 THEN :readAt ELSE readAt END WHERE localId = :localId")
+    @Query("""
+        UPDATE moth_messages
+        SET status = CASE
+            WHEN status = 'READ' THEN 'READ'
+            WHEN status = 'DELIVERED' AND :status IN ('SENDING', 'SENT') THEN 'DELIVERED'
+            WHEN status = 'SENT' AND :status = 'SENDING' THEN 'SENT'
+            ELSE :status
+        END,
+        sentAt = CASE WHEN :sentAt > 0 THEN :sentAt ELSE sentAt END,
+        deliveredAt = CASE WHEN :deliveredAt > 0 AND deliveredAt <= 0 THEN :deliveredAt ELSE deliveredAt END,
+        readAt = CASE WHEN :readAt > 0 AND readAt <= 0 THEN :readAt ELSE readAt END
+        WHERE localId = :localId
+    """)
     suspend fun updateMessageStatus(localId: String, status: String, sentAt: Long = 0L, deliveredAt: Long = 0L, readAt: Long = 0L)
 
     @Query("UPDATE moth_messages SET listenedAt = CASE WHEN :listenedAt > 0 THEN :listenedAt ELSE listenedAt END, status = 'READ', readAt = CASE WHEN readAt <= 0 AND :listenedAt > 0 THEN :listenedAt ELSE readAt END WHERE localId = :localId")

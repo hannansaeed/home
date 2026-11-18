@@ -40,9 +40,11 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Density
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.core.content.ContextCompat
@@ -79,7 +81,9 @@ class MainActivity : ComponentActivity() {
         val bootPrefs = getSharedPreferences("moth_session_prefs", Context.MODE_PRIVATE)
         val savedFontId = bootPrefs.getString("pref_app_font", AppFontOption.PIXELIFY_SANS.id)
         val savedThemeId = bootPrefs.getString("pref_app_theme", AppThemeOption.LANTERN_NIGHT.id)
+        val savedUiFontScale = bootPrefs.getFloat("pref_ui_font_scale", 1.0f).coerceIn(0.75f, 1.35f)
         PixelifySans = AppFontOption.fromId(savedFontId).fontFamily
+        activeUiFontScale = savedUiFontScale
         activeAppTheme = AppThemeOption.fromId(savedThemeId)
 
         super.onCreate(savedInstanceState)
@@ -116,15 +120,24 @@ class MainActivity : ComponentActivity() {
                     },
                 )
             }
-            ChatTheme(appFontFamily = PixelifySans, themeOption = activeAppTheme) {
-                Surface(
-                    modifier = Modifier.fillMaxSize(),
-                    color = MothBgDark,
-                ) {
-                    MothApp(
-                        pendingChatTarget = pendingChatTarget,
-                        onConsumedPendingChat = { pendingChatTarget = null },
-                    )
+            val baseDensity = LocalDensity.current
+            val scaledDensity = remember(baseDensity, activeUiFontScale) {
+                Density(
+                    density = baseDensity.density,
+                    fontScale = baseDensity.fontScale * activeUiFontScale,
+                )
+            }
+            CompositionLocalProvider(LocalDensity provides scaledDensity) {
+                ChatTheme(appFontFamily = PixelifySans, themeOption = activeAppTheme) {
+                    Surface(
+                        modifier = Modifier.fillMaxSize(),
+                        color = MothBgDark,
+                    ) {
+                        MothApp(
+                            pendingChatTarget = pendingChatTarget,
+                            onConsumedPendingChat = { pendingChatTarget = null },
+                        )
+                    }
                 }
             }
         }

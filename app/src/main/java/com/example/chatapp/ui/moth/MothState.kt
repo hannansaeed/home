@@ -42,6 +42,7 @@ import com.example.chatapp.ui.theme.AppFontOption
 import com.example.chatapp.ui.theme.AppThemeOption
 import com.example.chatapp.ui.theme.PixelifySans
 import com.example.chatapp.ui.theme.activeAppTheme
+import com.example.chatapp.ui.theme.activeUiFontScale
 import java.lang.ref.WeakReference
 import com.example.chatapp.ui.components.decodeOrientedBitmap
 import com.example.chatapp.crypto.EcdhAesGcmCrypto
@@ -58,6 +59,7 @@ import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 import com.google.firebase.firestore.ListenerRegistration
 import com.google.firebase.firestore.SetOptions
+import com.google.firebase.messaging.FirebaseMessaging
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -117,6 +119,8 @@ class MothState(
 
     private val ioScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
     private val burnMutex = Mutex()
+    private val receiptMutex = Mutex()
+    private val markReadMutex = Mutex()
     private val groupKeysCache = ConcurrentHashMap<String, ByteArray>()
 
     var currentUsername by mutableStateOf("")
@@ -136,6 +140,8 @@ class MothState(
     var disableReadReceipts by mutableStateOf(prefs.getBoolean(KEY_DISABLE_READ_RECEIPTS, false))
         private set
     var messageFontScale by mutableStateOf(prefs.getFloat(KEY_FONT_SCALE, 1.0f))
+        private set
+    var uiFontScale by mutableStateOf(prefs.getFloat(KEY_UI_FONT_SCALE, 1.0f).coerceIn(0.75f, 1.35f))
         private set
     var selectedFontId by mutableStateOf(
         prefs.getString(KEY_APP_FONT, AppFontOption.PIXELIFY_SANS.id) ?: AppFontOption.PIXELIFY_SANS.id
@@ -233,6 +239,7 @@ class MothState(
         val fontOption = AppFontOption.fromId(selectedFontId)
         selectedFontId = fontOption.id
         PixelifySans = fontOption.fontFamily
+        activeUiFontScale = uiFontScale
 
         val themeOption = AppThemeOption.fromId(selectedThemeId)
         selectedThemeId = themeOption.id
@@ -304,6 +311,13 @@ class MothState(
     fun setFontScale(scale: Float) {
         messageFontScale = scale
         prefs.edit().putFloat(KEY_FONT_SCALE, scale).apply()
+    }
+
+    fun updateUiFontScale(scale: Float) {
+        val clamped = scale.coerceIn(0.75f, 1.35f)
+        uiFontScale = clamped
+        activeUiFontScale = clamped
+        prefs.edit().putFloat(KEY_UI_FONT_SCALE, clamped).apply()
     }
 
     fun setAppFont(option: AppFontOption) {
@@ -418,6 +432,17 @@ class MothState(
                 cancelNotificationForTarget(openChat.orEmpty(), openPeer.orEmpty())
             }
             if (user.isNotBlank()) {
+                if (!openChat.isNullOrBlank()) {
+                    ioScope.launch {
+                        val targetConv = mothDao.getChat(openChat)
+                        val peer = targetConv?.otherUsername?.lowercase()
+                            ?: openPeer?.takeIf { it.isNotBlank() }
+                            ?: openChat.substringAfter("::", openChat).lowercase()
+                        mothDao.markChatRead(openChat)
+                        targetConv?.let { syncChatToCloud(it.copy(unreadCount = 0)) }
+                        markIncomingMessagesAsRead(user, openChat, peer, targetConv?.isGroup == true)
+                    }
+                }
                 refreshMyScreentimeAndPublish()
             }
         }
@@ -890,6 +915,25 @@ class MothState(
         }
 
         prefs.edit().remove(KEY_LOGGED_IN_USER).apply()
+        if (oldUser.isNotBlank()) {
+            val clearScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+            clearScope.launch {
+                try {
+                    FirebaseMessaging.getInstance().unsubscribeFromTopic(fcmTopicForUser(oldUser)).await()
+                } catch (_: Exception) {}
+                try {
+                    db.collection("users").document(oldUser)
+                        .set(
+                            mapOf(
+                                "fcmToken" to FieldValue.delete(),
+                                "fcmUpdatedAt" to FieldValue.serverTimestamp(),
+                            ),
+                            SetOptions.merge(),
+                        ).await()
+                } catch (_: Exception) {}
+                clearScope.cancel()
+            }
+        }
         MothBackgroundSync.syncState(appContext)
         stopAllStreamsAndJobs()
         contactPresenceSnapshots.clear()
@@ -927,8 +971,8 @@ class MothState(
 
         // Initialize E2EE keypair & publish public key to Firestore
         val myPubKey = crypto.initializeForUser(username)
-        if (myPubKey.isNotBlank()) {
-            ioScope.launch {
+        ioScope.launch {
+            if (myPubKey.isNotBlank()) {
                 try {
                     db.collection("users").document(username).set(
                         mapOf("e2eePublicKey" to myPubKey),
@@ -936,6 +980,7 @@ class MothState(
                     ).await()
                 } catch (_: Exception) {}
             }
+            syncFcmRegistration(username)
         }
 
         publishMyPresence(username, isAppInForeground)
@@ -1368,24 +1413,26 @@ class MothState(
                 val receiptAt = doc.getLong("receiptAt") ?: System.currentTimeMillis()
                 val ids = (doc.get("targetMsgIds") as? List<*>)?.filterIsInstance<String>().orEmpty()
                 val newStatus = try { MessageStatus.valueOf(statusStr) } catch (_: Exception) { return }
-                for (targetId in ids) {
-                    val localId = localMsgIdFor(username, targetId)
-                    val existing = mothDao.getMessage(localId) ?: continue
-                    val currentRank = statusRank(existing.status)
-                    val targetRank = statusRank(newStatus.name)
-                    if (targetRank > currentRank) {
-                        val deliveredMs = when {
-                            newStatus == MessageStatus.DELIVERED -> receiptAt
-                            newStatus == MessageStatus.READ && existing.deliveredAt <= 0L -> receiptAt
-                            else -> 0L
+                receiptMutex.withLock {
+                    for (targetId in ids) {
+                        val localId = localMsgIdFor(username, targetId)
+                        val existing = mothDao.getMessage(localId) ?: continue
+                        val currentRank = statusRank(existing.status)
+                        val targetRank = statusRank(newStatus.name)
+                        if (targetRank > currentRank) {
+                            val deliveredMs = when {
+                                newStatus == MessageStatus.DELIVERED -> receiptAt
+                                newStatus == MessageStatus.READ && existing.deliveredAt <= 0L -> receiptAt
+                                else -> 0L
+                            }
+                            val readMs = if (newStatus == MessageStatus.READ) receiptAt else 0L
+                            mothDao.updateMessageStatus(
+                                localId = localId,
+                                status = newStatus.name,
+                                deliveredAt = deliveredMs,
+                                readAt = readMs,
+                            )
                         }
-                        val readMs = if (newStatus == MessageStatus.READ) receiptAt else 0L
-                        mothDao.updateMessageStatus(
-                            localId = localId,
-                            status = newStatus.name,
-                            deliveredAt = deliveredMs,
-                            readAt = readMs,
-                        )
                     }
                 }
                 return
@@ -1720,6 +1767,16 @@ class MothState(
             globalOpenChatPeer = cleanPeer
         }
         cancelNotificationForTarget(chatId, cleanPeer)
+        val owner = currentUsername
+        if (owner.isNotBlank() && isAppInForeground) {
+            ioScope.launch {
+                val targetConv = mothDao.getChat(chatId)
+                val otherUser = targetConv?.otherUsername?.lowercase()
+                    ?: cleanPeer.ifBlank { chatId.substringAfter("::", chatId).lowercase() }
+                mothDao.markChatRead(chatId)
+                markIncomingMessagesAsRead(owner, chatId, otherUser, targetConv?.isGroup == true)
+            }
+        }
     }
 
     fun clearChatScreenVisible(chatId: String) {
@@ -2126,22 +2183,27 @@ class MothState(
     }
 
     private suspend fun markIncomingMessagesAsRead(owner: String, chatId: String, otherUser: String, isGroup: Boolean) {
-        val msgs = mothDao.getMessagesByChatOnce(owner, chatId)
-        val unreadIncoming = msgs.filter {
-            !it.senderUsername.equals(owner, ignoreCase = true) && it.status != MessageStatus.READ.name
-        }
-        if (unreadIncoming.isEmpty()) return
-        val now = System.currentTimeMillis()
-        unreadIncoming.forEach { m ->
-            mothDao.updateMessageStatus(
-                localId = m.localId,
-                status = MessageStatus.READ.name,
-                deliveredAt = if (m.deliveredAt <= 0L) now else 0L,
-                readAt = now,
-            )
-        }
-        if (!isGroup && otherUser != "support" && !disableReadReceipts) {
-            sendReceiptRelay(owner, otherUser, unreadIncoming.map { it.id }, MessageStatus.READ)
+        markReadMutex.withLock {
+            val msgs = mothDao.getMessagesByChatOnce(owner, chatId)
+            val unreadIncoming = msgs.filter {
+                !it.isDeleted &&
+                    !it.senderUsername.equals(owner, ignoreCase = true) &&
+                    it.status != MessageStatus.READ.name
+            }
+            if (unreadIncoming.isEmpty()) return
+            val now = System.currentTimeMillis()
+            unreadIncoming.forEach { m ->
+                mothDao.updateMessageStatus(
+                    localId = m.localId,
+                    status = MessageStatus.READ.name,
+                    deliveredAt = if (m.deliveredAt <= 0L) now else 0L,
+                    readAt = now,
+                )
+            }
+            val cleanOther = otherUser.trim().removePrefix("@").lowercase()
+            if (!isGroup && cleanOther.isNotBlank() && cleanOther != "support" && !disableReadReceipts) {
+                sendReceiptRelay(owner, cleanOther, unreadIncoming.map { it.id }, MessageStatus.READ)
+            }
         }
     }
 
@@ -2535,6 +2597,22 @@ class MothState(
         localMessagesJob = scope.launch {
             mothDao.observeMessages(ownerUsername, chatId).collect { entities ->
                 activeMessages = entities.map { entity -> mapMessageEntity(entity, ownerUsername) }
+                if (isAppInForeground && activeChatId.equals(chatId, ignoreCase = true)) {
+                    val hasUnreadIncoming = entities.any {
+                        !it.isDeleted &&
+                            !it.senderUsername.equals(ownerUsername, ignoreCase = true) &&
+                            it.status != MessageStatus.READ.name
+                    }
+                    if (hasUnreadIncoming) {
+                        ioScope.launch {
+                            val chatEntity = mothDao.getChat(chatId)
+                            val other = chatEntity?.otherUsername?.lowercase()
+                                ?: chatId.substringAfter("::", chatId).lowercase()
+                            mothDao.markChatRead(chatId)
+                            markIncomingMessagesAsRead(ownerUsername, chatId, other, chatEntity?.isGroup == true)
+                        }
+                    }
+                }
             }
         }
     }
@@ -3290,6 +3368,7 @@ class MothState(
             "id" to msgId,
             "senderUsername" to sender,
             "recipientUsername" to recipient,
+            "fcmTopic" to fcmTopicForUser(recipient),
             "senderPublicKey" to crypto.getPublicKeyBase64(),
             "type" to type.name,
             "leaveTrace" to leaveTrace,
@@ -3302,6 +3381,10 @@ class MothState(
         if (!replyToId.isNullOrBlank()) payload["replyToId"] = replyToId
         if (!replyToSender.isNullOrBlank()) payload["replyToSender"] = replyToSender
         if (!replyToPreview.isNullOrBlank()) payload["replyToPreview"] = replyToPreview
+        val cachedRecipientToken = resolveRecipientFcmToken(recipient)
+        if (!cachedRecipientToken.isNullOrBlank()) {
+            payload["recipientFcmToken"] = cachedRecipientToken
+        }
 
         val canEncrypt1to1 = groupId == null && ensurePeerPublicKey(recipient)
         if (groupKey != null) {
@@ -3766,7 +3849,7 @@ class MothState(
         onSuccess: () -> Unit = {}
     ) {
         val owner = currentUsername
-        val cleanName = name.trim().lowercase()
+        val cleanName = name.trim().removePrefix("@").lowercase()
         if (owner.isBlank()) {
             onError("Not logged in"); return
         }
@@ -3781,20 +3864,24 @@ class MothState(
             try {
                 var remoteColor = avatarColorForUsername(cleanName).toArgb().toLong()
                 var savedAvatarPath: String? = null
-                withContext(Dispatchers.IO) {
-                    try {
-                        val userDoc = db.collection("users").document(cleanName).get().await()
-                        if (userDoc.exists()) {
-                            userDoc.getString("e2eePublicKey")?.let { crypto.cachePeerPublicKey(cleanName, it) }
-                            userDoc.getLong("avatarColorArgb")?.let { remoteColor = it }
-                            val remoteAvatarBase64 = userDoc.getString("avatarBase64")
-                            if (!remoteAvatarBase64.isNullOrBlank()) {
-                                val file = File(mediaDir, "contact_avatar_${cleanName}.jpg")
-                                file.writeBytes(Base64.decode(remoteAvatarBase64, Base64.NO_WRAP))
-                                savedAvatarPath = file.absolutePath
-                            }
+                if (cleanName != "support") {
+                    val userDoc = withContext(Dispatchers.IO) {
+                        db.collection("users").document(cleanName).get().await()
+                    }
+                    if (!userDoc.exists()) {
+                        onError("User '@$cleanName' does not exist")
+                        return@launch
+                    }
+                    withContext(Dispatchers.IO) {
+                        userDoc.getString("e2eePublicKey")?.let { crypto.cachePeerPublicKey(cleanName, it) }
+                        userDoc.getLong("avatarColorArgb")?.let { remoteColor = it }
+                        val remoteAvatarBase64 = userDoc.getString("avatarBase64")
+                        if (!remoteAvatarBase64.isNullOrBlank()) {
+                            val file = File(mediaDir, "contact_avatar_${cleanName}.jpg")
+                            file.writeBytes(Base64.decode(remoteAvatarBase64, Base64.NO_WRAP))
+                            savedAvatarPath = file.absolutePath
                         }
-                    } catch (_: Exception) {}
+                    }
                 }
 
                 val chatId = chatIdFor(owner, cleanName)
@@ -3807,7 +3894,7 @@ class MothState(
                         id = chatId,
                         ownerUsername = owner,
                         otherUsername = cleanName,
-                        preview = initialMessage.trim().ifBlank { "lantern lit" },
+                        preview = initialMessage.trim().ifBlank { if (activeAppTheme == AppThemeOption.FLOWER_BLOOM) "flower planted" else "lantern lit" },
                         time = timeStr,
                         avatarColorArgb = remoteColor,
                         avatarLocalPath = savedAvatarPath ?: existing?.avatarLocalPath,
@@ -3825,7 +3912,7 @@ class MothState(
                 }
                 onSuccess()
             } catch (e: Exception) {
-                onError(e.localizedMessage ?: "Failed to create chat")
+                onError(e.localizedMessage ?: "Unable to verify user. Check your connection.")
             }
         }
     }
@@ -4526,6 +4613,7 @@ class MothState(
                     turnUsername = snap.getString("turnUsername") ?: participants.firstOrNull().orEmpty(),
                     roundNumber = (snap.getLong("roundNumber") ?: 1L).toInt(),
                     promptType = snap.getString("promptType") ?: "",
+                    selectedMode = snap.getString("selectedMode") ?: "",
                     promptText = snap.getString("promptText") ?: "",
                     promptPickedBy = snap.getString("promptPickedBy") ?: "",
                     lastActionText = snap.getString("lastActionText") ?: "",
@@ -4543,7 +4631,7 @@ class MothState(
         } else {
             listOf(me, targetConv.name.lowercase()).distinct()
         }
-        val firstTurn = participants.firstOrNull { !it.equals(me, ignoreCase = true) } ?: me
+        val firstTurn = participants.randomOrNull() ?: me
         ioScope.launch {
             try {
                 db.collection("tod_sessions").document(sessionId).set(
@@ -4555,9 +4643,10 @@ class MothState(
                         "turnUsername" to firstTurn,
                         "roundNumber" to 1,
                         "promptType" to "",
+                        "selectedMode" to "",
                         "promptText" to "",
                         "promptPickedBy" to "",
-                        "lastActionText" to "@$me summoned TOD bot",
+                        "lastActionText" to "@$me summoned TOD bot • @$firstTurn starts",
                         "updatedAt" to System.currentTimeMillis(),
                     )
                 ).await()
@@ -4573,6 +4662,7 @@ class MothState(
         val session = activeChatTodSession ?: return
         val me = currentUsername
         if (me.isBlank()) return
+        if (!session.turnUsername.equals(me, ignoreCase = true)) return
         val effectiveType = if (requestedType == "RANDOM") {
             if (kotlin.random.Random.nextBoolean()) "TRUTH" else "DARE"
         } else {
@@ -4586,9 +4676,40 @@ class MothState(
                 db.collection("tod_sessions").document(session.sessionId).update(
                     mapOf(
                         "promptType" to effectiveType,
+                        "selectedMode" to requestedType,
                         "promptText" to chosen,
                         "promptPickedBy" to me,
-                        "lastActionText" to "@$me rolled $effectiveType for @${session.turnUsername}",
+                        "lastActionText" to "@$me picked $requestedType",
+                        "updatedAt" to System.currentTimeMillis(),
+                    )
+                ).await()
+            } catch (_: Exception) {}
+        }
+    }
+
+    fun skipTodPrompt(chatId: String) {
+        val session = activeChatTodSession ?: return
+        val me = currentUsername
+        if (me.isBlank()) return
+        if (!session.turnUsername.equals(me, ignoreCase = true)) return
+        val mode = session.selectedMode.ifBlank { session.promptType }.ifBlank { "RANDOM" }
+        val effectiveType = if (mode == "RANDOM") {
+            if (kotlin.random.Random.nextBoolean()) "TRUTH" else "DARE"
+        } else {
+            mode
+        }
+        val promptPool = if (effectiveType == "TRUTH") BOT_TRUTHS else BOT_DARES
+        val candidates = promptPool.filterNot { it == session.promptText }.ifEmpty { promptPool }
+        val chosen = candidates.random()
+        ioScope.launch {
+            try {
+                db.collection("tod_sessions").document(session.sessionId).update(
+                    mapOf(
+                        "promptType" to effectiveType,
+                        "selectedMode" to mode,
+                        "promptText" to chosen,
+                        "promptPickedBy" to me,
+                        "lastActionText" to "@$me skipped for another ${mode.lowercase()}",
                         "updatedAt" to System.currentTimeMillis(),
                     )
                 ).await()
@@ -4599,6 +4720,7 @@ class MothState(
     fun advanceTodTurn(chatId: String) {
         val session = activeChatTodSession ?: return
         val me = currentUsername
+        if (me.isBlank() || !session.turnUsername.equals(me, ignoreCase = true)) return
         val conv = conversations.firstOrNull { it.id == chatId }
         val participants = session.participants.ifEmpty {
             if (conv?.isGroup == true) conv.members else listOf(me, conv?.name?.lowercase() ?: me)
@@ -4614,6 +4736,7 @@ class MothState(
                         "turnUsername" to nextPlayer,
                         "roundNumber" to (session.roundNumber + 1),
                         "promptType" to "",
+                        "selectedMode" to "",
                         "promptText" to "",
                         "promptPickedBy" to "",
                         "lastActionText" to "next turn: @$nextPlayer",
@@ -5529,6 +5652,8 @@ class MothState(
         private const val KEY_HIDE_TYPING = "pref_hide_typing"
         private const val KEY_DISABLE_READ_RECEIPTS = "pref_disable_read_receipts"
         private const val KEY_FONT_SCALE = "pref_font_scale"
+        private const val KEY_UI_FONT_SCALE = "pref_ui_font_scale"
+        private const val KEY_FCM_TOKEN = "pref_fcm_token"
         private const val KEY_APP_FONT = "pref_app_font"
         private const val KEY_APP_THEME = "pref_app_theme"
         private const val KEY_APP_LOCK_ENABLED = "pref_app_lock_enabled"
@@ -5543,5 +5668,78 @@ class MothState(
         private const val BURN_DURATION_MS = 10 * BURN_STEP_MS
         private const val MAX_RELAY_ATTACHMENT_BYTES = 600 * 1024
         private const val MAX_AVATAR_BYTES = 150 * 1024
+
+        fun fcmTopicForUser(username: String): String {
+            val clean = username.trim().removePrefix("@").lowercase()
+                .replace(Regex("[^a-zA-Z0-9_.~%-]"), "_")
+            return "moth_user_${clean.ifBlank { "unknown" }}"
+        }
+
+        suspend fun persistFcmToken(context: Context, token: String) {
+            if (token.isBlank()) return
+            val appCtx = context.applicationContext
+            val prefs = appCtx.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
+            prefs.edit().putString(KEY_FCM_TOKEN, token).apply()
+            val savedUser = prefs.getString(KEY_LOGGED_IN_USER, "")?.trim()?.lowercase().orEmpty()
+            if (savedUser.isBlank()) return
+            try {
+                FirebaseApp.initializeApp(appCtx)
+            } catch (_: Exception) {}
+            try {
+                val topic = fcmTopicForUser(savedUser)
+                FirebaseMessaging.getInstance().subscribeToTopic(topic).await()
+                val firestore = FirebaseFirestore.getInstance(
+                    appCtx.getString(R.string.firestore_database_id)
+                )
+                firestore.collection("users").document(savedUser).set(
+                    mapOf(
+                        "fcmToken" to token,
+                        "fcmTopic" to topic,
+                        "fcmUpdatedAt" to FieldValue.serverTimestamp(),
+                    ),
+                    SetOptions.merge(),
+                ).await()
+            } catch (_: Exception) {}
+        }
+    }
+
+    private suspend fun syncFcmRegistration(username: String) {
+        if (username.isBlank()) return
+        val topic = fcmTopicForUser(username)
+        try {
+            FirebaseMessaging.getInstance().subscribeToTopic(topic).await()
+        } catch (_: Exception) {}
+        try {
+            val token = FirebaseMessaging.getInstance().token.await()
+            if (!token.isNullOrBlank()) {
+                prefs.edit().putString(KEY_FCM_TOKEN, token).apply()
+                db.collection("users").document(username).set(
+                    mapOf(
+                        "fcmToken" to token,
+                        "fcmTopic" to topic,
+                        "fcmUpdatedAt" to FieldValue.serverTimestamp(),
+                    ),
+                    SetOptions.merge(),
+                ).await()
+            }
+        } catch (_: Exception) {}
+    }
+
+    private val recipientFcmTokenCache = ConcurrentHashMap<String, String>()
+
+    private suspend fun resolveRecipientFcmToken(recipient: String): String? {
+        val clean = recipient.trim().removePrefix("@").lowercase()
+        if (clean.isBlank() || clean == "support") return null
+        recipientFcmTokenCache[clean]?.let { return it }
+        return try {
+            val snap = db.collection("users").document(clean).get().await()
+            val token = snap.getString("fcmToken")?.trim().orEmpty()
+            if (token.isNotBlank()) {
+                recipientFcmTokenCache[clean] = token
+                token
+            } else null
+        } catch (_: Exception) {
+            null
+        }
     }
 }

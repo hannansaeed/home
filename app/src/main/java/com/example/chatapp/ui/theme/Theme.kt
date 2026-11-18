@@ -177,8 +177,9 @@ val FlowerBloomPalette = MothPalette(
     isLight = true,
 )
 
-// Active app font family & theme (defaults to Pixelify Sans + Lighting Lanterns; triggers recomposition)
+// Active app font family, UI font scale & theme (triggers recomposition)
 var PixelifySans: FontFamily by mutableStateOf(DefaultPixelifySans)
+var activeUiFontScale: Float by mutableStateOf(1.0f)
 var activeAppTheme: AppThemeOption by mutableStateOf(AppThemeOption.LANTERN_NIGHT)
 val isBloomTheme: Boolean get() = activeAppTheme == AppThemeOption.FLOWER_BLOOM
 val activePalette: MothPalette

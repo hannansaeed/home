@@ -17,6 +17,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.platform.testTag
@@ -395,10 +396,13 @@ internal fun ChatPinnedMessageBanner(
 @Composable
 internal fun ChatTodBotCard(
     tod: TodSessionState,
+    currentUsername: String,
     onPlayTurn: (String) -> Unit,
+    onSkipPrompt: () -> Unit,
     onAdvanceTurn: () -> Unit,
     onRemove: () -> Unit,
 ) {
+    val isMyTurn = tod.turnUsername.equals(currentUsername, ignoreCase = true)
     SteppedBox(
         modifier = Modifier
             .fillMaxWidth()
@@ -439,11 +443,11 @@ internal fun ChatTodBotCard(
                         )
                     }
                     Text(
-                        text = "TOD • r${tod.roundNumber} • @${tod.turnUsername}",
+                        text = if (isMyTurn) "TOD • r${tod.roundNumber} • your turn" else "TOD • r${tod.roundNumber} • @${tod.turnUsername}",
                         fontFamily = PixelifySans,
                         fontWeight = FontWeight.Bold,
                         fontSize = 12.sp,
-                        color = LanternAmber,
+                        color = if (isMyTurn) SecureGreen else LanternAmber,
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
@@ -460,6 +464,8 @@ internal fun ChatTodBotCard(
                         .testTag("remove_tod_bot_button"),
                 )
             }
+
+            val controlsAlpha = if (isMyTurn) 1f else 0.42f
 
             if (tod.promptText.isNotBlank()) {
                 Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -481,9 +487,9 @@ internal fun ChatTodBotCard(
                                 color = Color.White,
                             )
                         }
-                        if (tod.promptPickedBy.isNotBlank()) {
+                        if (tod.selectedMode.isNotBlank()) {
                             Text(
-                                text = "by @${tod.promptPickedBy}",
+                                text = "(${tod.selectedMode.lowercase()})",
                                 fontFamily = PixelifySans,
                                 fontSize = 10.sp,
                                 color = MutedText,
@@ -498,54 +504,94 @@ internal fun ChatTodBotCard(
                         lineHeight = 18.sp,
                     )
                 }
+
+                if (!isMyTurn) {
+                    Text(
+                        text = "waiting for @${tod.turnUsername}...",
+                        fontFamily = PixelifySans,
+                        fontSize = 11.sp,
+                        color = MutedText,
+                    )
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .alpha(controlsAlpha),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    SteppedButton(
+                        text = "skip",
+                        onClick = onSkipPrompt,
+                        enabled = isMyTurn,
+                        backgroundColor = TheirBubbleFill,
+                        borderColor = TheirBubbleBorder,
+                        textColor = TheirBubbleText,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("tod_skip_button"),
+                        cutSize = 2.dp,
+                    )
+                    SteppedButton(
+                        text = "next",
+                        onClick = onAdvanceTurn,
+                        enabled = isMyTurn,
+                        backgroundColor = SecureGreen,
+                        borderColor = Color(0xFF4CA877),
+                        textColor = MothBgDark,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("tod_next_button"),
+                        cutSize = 2.dp,
+                    )
+                }
             } else {
                 Text(
-                    text = "pick truth, dare, or random for @${tod.turnUsername}",
+                    text = if (isMyTurn) "your turn! pick truth, dare, or random" else "waiting for @${tod.turnUsername} to pick...",
                     fontFamily = PixelifySans,
                     fontSize = 12.sp,
                     color = MutedText,
                 )
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(6.dp),
-            ) {
-                SteppedButton(
-                    text = "truth",
-                    onClick = { onPlayTurn("TRUTH") },
-                    backgroundColor = TheirBubbleFill,
-                    borderColor = TheirBubbleBorder,
-                    textColor = TheirBubbleText,
-                    modifier = Modifier.weight(1f),
-                    cutSize = 2.dp,
-                )
-                SteppedButton(
-                    text = "dare",
-                    onClick = { onPlayTurn("DARE") },
-                    backgroundColor = WaxSealRed,
-                    borderColor = WaxSealDarkEdge,
-                    textColor = Color.White,
-                    modifier = Modifier.weight(1f),
-                    cutSize = 2.dp,
-                )
-                SteppedButton(
-                    text = "random",
-                    onClick = { onPlayTurn("RANDOM") },
-                    backgroundColor = MyBubbleFill,
-                    borderColor = MyBubbleBorder,
-                    textColor = MyBubbleText,
-                    modifier = Modifier.weight(1f),
-                    cutSize = 2.dp,
-                )
-                if (tod.promptText.isNotBlank()) {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .alpha(controlsAlpha),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
                     SteppedButton(
-                        text = "next",
-                        onClick = onAdvanceTurn,
-                        backgroundColor = SecureGreen,
-                        borderColor = Color(0xFF4CA877),
-                        textColor = MothBgDark,
-                        modifier = Modifier.weight(1f),
+                        text = "truth",
+                        onClick = { onPlayTurn("TRUTH") },
+                        enabled = isMyTurn,
+                        backgroundColor = TheirBubbleFill,
+                        borderColor = TheirBubbleBorder,
+                        textColor = TheirBubbleText,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("tod_pick_truth_button"),
+                        cutSize = 2.dp,
+                    )
+                    SteppedButton(
+                        text = "dare",
+                        onClick = { onPlayTurn("DARE") },
+                        enabled = isMyTurn,
+                        backgroundColor = WaxSealRed,
+                        borderColor = WaxSealDarkEdge,
+                        textColor = Color.White,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("tod_pick_dare_button"),
+                        cutSize = 2.dp,
+                    )
+                    SteppedButton(
+                        text = "random",
+                        onClick = { onPlayTurn("RANDOM") },
+                        enabled = isMyTurn,
+                        backgroundColor = MyBubbleFill,
+                        borderColor = MyBubbleBorder,
+                        textColor = MyBubbleText,
+                        modifier = Modifier
+                            .weight(1f)
+                            .testTag("tod_pick_random_button"),
                         cutSize = 2.dp,
                     )
                 }

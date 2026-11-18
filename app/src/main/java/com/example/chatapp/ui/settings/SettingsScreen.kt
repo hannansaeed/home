@@ -106,7 +106,7 @@ fun SettingsScreen(
                             color = TheirBubbleText,
                         )
                         Text(
-                            text = if (isBloomTheme) "garden blooming • private by default" else "lantern lit • private by default",
+                            text = if (isBloomTheme) "garden blooming" else "lantern lit",
                             fontFamily = PixelifySans,
                             fontSize = 12.sp,
                             color = MutedText,

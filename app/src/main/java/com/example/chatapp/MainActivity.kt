@@ -418,7 +418,7 @@ private fun MothOpeningSplash() {
             )
 
             Text(
-                text = "private by default",
+                text = if (isBloomTheme) "first bloom" else "secure messaging",
                 fontFamily = PixelifySans,
                 fontSize = 13.sp,
                 color = MutedText,

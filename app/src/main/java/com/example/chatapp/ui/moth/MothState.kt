@@ -5391,17 +5391,25 @@ class MothState(
                 .build()
 
             val style = NotificationCompat.MessagingStyle(mePerson)
-            val recentMsgs = if (ownerUsername.isNotBlank() && chatId.isNotBlank()) {
+            val unreadMsgs = if (ownerUsername.isNotBlank() && chatId.isNotBlank()) {
                 runCatching {
                     ChatDatabaseProvider.get(appCtx).mothDao()
                         .getMessagesByChatOnce(ownerUsername, chatId)
-                        .filter { !it.isDeleted }
-                        .takeLast(6)
+                        .filter { !it.isDeleted && !it.senderUsername.equals(ownerUsername, ignoreCase = true) && it.status != MessageStatus.READ.name }
                 }.getOrDefault(emptyList())
             } else emptyList()
 
-            if (recentMsgs.isNotEmpty()) {
-                recentMsgs.forEach { msg ->
+            val messagesToDisplay = unreadMsgs.ifEmpty {
+                val allIncoming = runCatching {
+                    ChatDatabaseProvider.get(appCtx).mothDao()
+                        .getMessagesByChatOnce(ownerUsername, chatId)
+                        .filter { !it.isDeleted && !it.senderUsername.equals(ownerUsername, ignoreCase = true) }
+                }.getOrDefault(emptyList())
+                allIncoming.takeLast(1)
+            }
+
+            if (messagesToDisplay.isNotEmpty()) {
+                messagesToDisplay.forEach { msg ->
                     val isMine = msg.senderUsername.equals(ownerUsername, ignoreCase = true)
                     val msgPerson = if (isMine) mePerson else {
                         val msgSender = msg.senderUsername.ifBlank { senderTitle }

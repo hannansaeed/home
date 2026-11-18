@@ -197,8 +197,11 @@ fun CallHistoryEmptyPage(
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
                     items(filteredLogs, key = { it.id }) { log ->
+                        val peerConv = state.conversations.firstOrNull { it.name.equals(log.peerUsername, ignoreCase = true) }
                         CallLogRow(
                             log = log,
+                            avatarPath = peerConv?.avatarLocalPath,
+                            avatarColor = peerConv?.avatarColor ?: LanternAmber,
                             onCallVoice = { initiateVoiceCall(log.peerUsername) },
                             onDelete = { state.deleteCallLog(log.id) },
                         )
@@ -212,6 +215,8 @@ fun CallHistoryEmptyPage(
 @Composable
 private fun CallLogRow(
     log: MothCallLog,
+    avatarPath: String?,
+    avatarColor: Color,
     onCallVoice: () -> Unit,
     onDelete: () -> Unit,
 ) {
@@ -242,7 +247,7 @@ private fun CallLogRow(
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(10.dp),
         ) {
-            UserAvatar(avatarPath = null, color = LanternAmber, size = 36.dp)
+            UserAvatar(avatarPath = avatarPath, color = avatarColor, size = 36.dp)
             Column(modifier = Modifier.weight(1f)) {
                 Text(
                     text = "@${log.peerUsername}",
@@ -347,6 +352,10 @@ fun ActiveCallOverlay(state: MothState) {
         PixelStarfield()
 
         // Top / Center Peer Header
+        val peerConv = state.conversations.firstOrNull { it.name.equals(call.peerUsername, ignoreCase = true) }
+        val avatarPath = peerConv?.avatarLocalPath
+        val avatarColor = peerConv?.avatarColor ?: LanternAmber
+
         Column(
             modifier = Modifier
                 .align(Alignment.Center)
@@ -354,7 +363,7 @@ fun ActiveCallOverlay(state: MothState) {
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp),
         ) {
-            UserAvatar(avatarPath = null, color = LanternAmber, size = 84.dp)
+            UserAvatar(avatarPath = avatarPath, color = avatarColor, size = 84.dp)
             Text(
                 text = "@${call.peerUsername}",
                 fontFamily = PixelifySans,

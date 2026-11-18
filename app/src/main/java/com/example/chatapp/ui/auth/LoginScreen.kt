@@ -186,7 +186,7 @@ fun LoginScreen(
             Spacer(modifier = Modifier.height(6.dp))
 
             Text(
-                text = if (authMode == AuthScreenMode.LOGIN) "private by default" else if (isBloomTheme) "grow your private garden" else "craft your nocturnal identity",
+                text = if (authMode == AuthScreenMode.LOGIN) (if (isBloomTheme) "first bloom" else "secure messaging") else if (isBloomTheme) "grow your private garden" else "craft your nocturnal identity",
                 fontFamily = PixelifySans,
                 fontSize = 15.sp,
                 color = MutedText,
